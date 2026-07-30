@@ -1,0 +1,41 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build files
+.build/
+bin/
+
+# Editors
+.vs/
+.vscode/
+.zed/
+.cache/
+
+# Logs
+logs/
+*.log

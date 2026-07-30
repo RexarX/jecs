@@ -1,0 +1,8 @@
+{
+  "local_modules": ["modules"],
+  "roots": ["build.jai"],
+  "build_root": "build.jai",
+  "intermediate_path": ".build",
+  "auto_insert_parentheses": true,
+  "use_symbols_from_local_modules": true
+}

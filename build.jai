@@ -103,7 +103,7 @@ build :: () {
     set_build_options(options, workspace);
 
     compiler_begin_intercept(workspace);
-    add_build_file("src/jecs.jai", workspace);
+    add_build_file("module.jai", workspace);
 
     while true {
         message := compiler_wait_for_message();
@@ -115,6 +115,7 @@ build :: () {
                 break;
         }
     }
+
     compiler_end_intercept(workspace);
 }
 

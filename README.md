@@ -1,15 +1,50 @@
 # jecs
 
-Jai ECS
+Jai ECS library.
 
-## Building
+## Using as a module
+
+Clone or submodule this repository into your project's `modules` folder:
+
+```
+my_project/
+  modules/
+    jecs/          ← this repo
+```
+
+```jai
+#import "jecs";
+```
+
+The folder name must be `jecs` — the compiler resolves `#import "jecs"` to `modules/jecs/module.jai`.
+
+## Option : command line
+
+Point `-import_dir` at the **parent** of the `jecs` folder:
+
+```bash
+jai your_program.jai -import_dir path/to/modules
+```
+
+### Option 2: metaprogram
+
+```jai
+import_path: [..] string;
+array_add(*import_path, tprint("%/modules", #filepath));
+array_add(*import_path, ..options.import_path);
+options.import_path = import_path;
+```
+
+## Building the static library
 
 ```bash
 jai build.jai
 ```
 
-Also you can choose preset for the build with `-debug`(default), `-relwithdebinfo`, `-release` like this:
+Build presets: `-debug` (default), `-relwithdebinfo`, `-release`
 
 ```bash
 jai build.jai - -release
 ```
+
+Output goes to `bin/<platform>-<arch>-<preset>/`.

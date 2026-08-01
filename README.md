@@ -18,7 +18,7 @@ my_project/
 
 The folder name must be `jecs` — the compiler resolves `#import "jecs"` to `modules/jecs/module.jai`.
 
-## Option 1: command line
+### Option 1: command line
 
 Point `-import_dir` at the **parent** of the `jecs` folder:
 

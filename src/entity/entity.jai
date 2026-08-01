@@ -1,13 +1,14 @@
 #import "Hash";
 
 Entity :: struct {
-    Index :: u32;
-    Generation :: u32;
-    INVALID_INDEX: Index : 0xFFFFFFFF;
-    INVALID_GENERATION: Generation : 0xFFFFFFFF;
+    // Storage indices (Dense_Index, Row_Index, etc.) derive from Index — change it here to widen them all.
+    Index :: #type,isa u32;
+    Generation :: #type,isa u32;
+    INVALID_INDEX :: cast(Index) 0xFFFFFFFF;
+    INVALID_GENERATION :: cast(Generation) 0xFFFFFFFF;
 
-    index: Index = INVALID_INDEX;
-    generation: Generation = INVALID_GENERATION;
+    index := INVALID_INDEX;
+    generation := INVALID_GENERATION;
 }
 
 INVALID_ENTITY :: Entity.{};

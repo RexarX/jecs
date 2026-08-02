@@ -2,7 +2,7 @@
 #import "Hash_Table";
 
 Sparse_Set_Storage :: struct {
-    storages: Table(*Type_Info, Sparse_Storage_Entry);
+    storages:  Table(*Type_Info, Sparse_Storage_Entry);
     allocator: Allocator;
 }
 
@@ -18,7 +18,7 @@ reset :: (using storage: *Sparse_Set_Storage) {
         entry_ptr := table_find_pointer(*storages, type_info_ptr);
         if entry_ptr free_entry(entry_ptr, allocator);
     }
-    table_reset(*storages);
+    deinit(*storages);
 }
 
 clear :: (using storage: *Sparse_Set_Storage) {
@@ -28,53 +28,100 @@ clear :: (using storage: *Sparse_Set_Storage) {
     }
 }
 
-try_find_set :: inline (using storage: *Sparse_Set_Storage, $T: Type) -> *Sparse_Set(T) #must {
-    entry := table_find_pointer(*storages, type_info(T));
+try_find_set :: inline (using storage: *Sparse_Set_Storage,
+                        type_info_ptr: *Type_Info) -> *Sparse_Set #must {
+    entry := table_find_pointer(*storages, type_info_ptr);
     if !entry return null;
-    return as_sparse_set(T, entry);
+    return as_sparse_set(entry);
 }
 
-assign :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type, value: T) {
+try_find_set :: inline (using storage: *Sparse_Set_Storage,
+                        $T: Type) -> *Sparse_Set #must {
+    return try_find_set(storage, type_info(T));
+}
+
+assign_component :: inline (using storage: *Sparse_Set_Storage,
+                            entity: Entity, value: $T) {
     set := ensure_set(storage, T);
-    assign(set, entity, value);
+    assign_component(set, entity, value);
 }
 
-try_assign :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type, value: T) -> bool {
+try_assign_component :: inline (using storage: *Sparse_Set_Storage,
+                                entity: Entity, value: $T) -> bool {
     set := ensure_set(storage, T);
-    return try_assign(set, entity, value);
+    return try_assign_component(set, entity, value);
 }
 
-erase :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type) {
-    entry := table_find_pointer(*storages, type_info(T));
+assign_component_bytes :: inline (using storage: *Sparse_Set_Storage,
+                                  entity: Entity, type_info_ptr: *Type_Info,
+                                  data: *void) {
+    set := ensure_set(storage, type_info_ptr);
+    assign_component_bytes(set, entity, data);
+}
+
+try_assign_component_bytes :: inline (using storage: *Sparse_Set_Storage,
+                                      entity: Entity, type_info_ptr: *Type_Info,
+                                      data: *void) -> bool {
+    set := ensure_set(storage, type_info_ptr);
+    return try_assign_component_bytes(set, entity, data);
+}
+
+remove_component :: inline (using storage: *Sparse_Set_Storage,
+                            entity: Entity, $T: Type) {
+    remove_component(storage, entity, type_info(T));
+}
+
+remove_component :: inline (using storage: *Sparse_Set_Storage,
+                            entity: Entity, type_info_ptr: *Type_Info) {
+    entry := table_find_pointer(*storages, type_info_ptr);
     if !entry return;
-    erase(as_sparse_set(T, entry), entity);
+    erase_entity(as_sparse_set(entry), entity);
 }
 
-try_erase :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type) -> bool {
-    entry := table_find_pointer(*storages, type_info(T));
+try_remove_component :: inline (using storage: *Sparse_Set_Storage,
+                                entity: Entity, $T: Type) -> bool {
+    return try_remove_component(storage, entity, type_info(T));
+}
+
+try_remove_component :: inline (using storage: *Sparse_Set_Storage,
+                                entity: Entity,
+                                type_info_ptr: *Type_Info) -> bool {
+    entry := table_find_pointer(*storages, type_info_ptr);
     if !entry return false;
-    return try_erase(as_sparse_set(T, entry), entity);
+    return try_erase_entity(as_sparse_set(entry), entity);
 }
 
-get :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type) -> *T #must {
+get_component :: inline (using storage: *Sparse_Set_Storage,
+                         entity: Entity, $T: Type) -> *T #must {
+    #assert #run !is_tag(T) "Use has_component() for tag components; get_component() requires a value type!";
     set := try_find_set(storage, T);
-    assert(set != null, "Sparse storage does not exist for % component type!", component_name(T));
-    return get(set, entity);
+    assert(set != null, "Sparse storage does not exist for % component type!",
+           #run get_component_name(T));
+    return get_component(set, entity, T);
 }
 
-try_get :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type) -> *T #must {
+try_get_component :: inline (using storage: *Sparse_Set_Storage,
+                             entity: Entity, $T: Type) -> *T #must {
+    #assert #run !is_tag(T) "Use has_component() for tag components; try_get_component() requires a value type!";
     entry := table_find_pointer(*storages, type_info(T));
     if !entry return null;
-    return try_get(as_sparse_set(T, entry), entity);
+    return try_get_component(as_sparse_set(entry), entity, T);
 }
 
-contains :: inline (using storage: *Sparse_Set_Storage, entity: Entity, $T: Type) -> bool #must {
-    entry := table_find_pointer(*storages, type_info(T));
+has_component :: inline (using storage: *Sparse_Set_Storage,
+                         entity: Entity, $T: Type) -> bool #must {
+    return has_component(storage, entity, type_info(T));
+}
+
+has_component :: inline (using storage: *Sparse_Set_Storage, entity: Entity,
+                         type_info_ptr: *Type_Info) -> bool #must {
+    entry := table_find_pointer(*storages, type_info_ptr);
     if !entry return false;
-    return contains(as_sparse_set(T, entry), entity);
+    return contains_entity(as_sparse_set(entry), entity);
 }
 
-try_remove_entity :: (using storage: *Sparse_Set_Storage, entity: Entity) -> bool {
+try_remove_entity :: (using storage: *Sparse_Set_Storage,
+                      entity: Entity) -> bool {
     removed := false;
     for entry, type_info_ptr: storages {
         entry_ptr := table_find_pointer(*storages, type_info_ptr);
@@ -85,87 +132,53 @@ try_remove_entity :: (using storage: *Sparse_Set_Storage, entity: Entity) -> boo
     return removed;
 }
 
-ensure_set :: (using storage: *Sparse_Set_Storage, $T: Type) -> *Sparse_Set(T) #must {
-    type_info_ptr := type_info(T);
-    entry := table_find_pointer(*storages, type_info_ptr);
-    if entry return as_sparse_set(T, entry);
+ensure_set :: inline (using storage: *Sparse_Set_Storage,
+               $T: Type) -> *Sparse_Set #must {
+    return ensure_set(storage, type_info(T));
+}
 
-    new_entry := make_sparse_storage_entry(T, allocator);
+ensure_set :: (using storage: *Sparse_Set_Storage,
+               type_info_ptr: *Type_Info) -> *Sparse_Set #must {
+    entry := table_find_pointer(*storages, type_info_ptr);
+    if entry return as_sparse_set(entry);
+
+    new_entry := make_sparse_storage_entry(type_info_ptr, allocator);
     table_add(*storages, type_info_ptr, new_entry);
     entry_ptr := table_find_pointer(*storages, type_info_ptr);
-    assert(entry_ptr != null, "Failed to create sparse storage for % component type!", component_name(T));
-    return as_sparse_set(T, entry_ptr);
+    assert(entry_ptr != null, "Failed to create sparse storage for type %!",
+           type_info_ptr);
+    return as_sparse_set(entry_ptr);
 }
 
 Sparse_Storage_Entry :: struct {
-    storage: *void;
-    clear_fn: Sparse_Storage_Clear_Fn;
-    reset_fn: Sparse_Storage_Reset_Fn;
-    try_remove_fn: Sparse_Storage_Try_Remove_Fn;
-    contains_fn: Sparse_Storage_Contains_Fn;
-    size_fn: Sparse_Storage_Size_Fn;
+    storage: *Sparse_Set;
 }
 
-Sparse_Storage_Clear_Fn :: #type (ptr: *void);
-Sparse_Storage_Reset_Fn :: #type (ptr: *void);
-Sparse_Storage_Try_Remove_Fn :: #type (ptr: *void, entity: Entity) -> bool;
-Sparse_Storage_Contains_Fn :: #type (ptr: *void, entity: Entity) -> bool;
-Sparse_Storage_Size_Fn :: #type (ptr: *void) -> s64;
-
-make_sparse_storage_entry :: ($T: Type, allocator: Allocator) -> Sparse_Storage_Entry #must {
-    set := New(Sparse_Set(T),, allocator);
-    init(set, allocator);
-
-    clear_erased :: (ptr: *void) {
-        clear(cast(*Sparse_Set(T)) ptr);
-    }
-
-    reset_erased :: (ptr: *void) {
-        reset(cast(*Sparse_Set(T)) ptr);
-    }
-
-    entry: Sparse_Storage_Entry;
-    entry.storage = set;
-    entry.clear_fn = clear_erased;
-    entry.reset_fn = reset_erased;
-    entry.try_remove_fn = (ptr: *void, entity: Entity) -> bool {
-        return try_erase(cast(*Sparse_Set(T)) ptr, entity);
-    };
-    entry.contains_fn = (ptr: *void, entity: Entity) -> bool {
-        return contains(cast(*Sparse_Set(T)) ptr, entity);
-    };
-    entry.size_fn = (ptr: *void) -> s64 {
-        return size(cast(*Sparse_Set(T)) ptr);
-    };
-    return entry;
+make_sparse_storage_entry :: inline (type_info_ptr: *Type_Info,
+                              allocator: Allocator) -> Sparse_Storage_Entry #must {
+    set := New(Sparse_Set,, allocator);
+    init(set, type_info_ptr, allocator);
+    return .{storage = set};
 }
 
 free_entry :: (entry: *Sparse_Storage_Entry, allocator: Allocator) {
     if entry.storage {
-        reset_entry(entry);
+        reset(entry.storage);
         free(entry.storage,, allocator);
         entry.* = .{};
     }
 }
 
-reset_entry :: inline (entry: *Sparse_Storage_Entry) {
-    if entry.reset_fn entry.reset_fn(entry.storage);
-}
-
 clear_entry :: inline (entry: *Sparse_Storage_Entry) {
-    if entry.clear_fn entry.clear_fn(entry.storage);
+    if entry.storage clear(entry.storage);
 }
 
-try_remove_entry :: inline (entry: *Sparse_Storage_Entry, entity: Entity) -> bool {
-    if !entry.try_remove_fn return false;
-    return entry.try_remove_fn(entry.storage, entity);
+try_remove_entry :: inline (entry: *Sparse_Storage_Entry,
+                            entity: Entity) -> bool {
+    if !entry.storage return false;
+    return try_erase_entity(entry.storage, entity);
 }
 
-contains_entry :: inline (entry: *Sparse_Storage_Entry, entity: Entity) -> bool #must {
-    if !entry.contains_fn return false;
-    return entry.contains_fn(entry.storage, entity);
-}
-
-as_sparse_set :: inline ($T: Type, entry: *Sparse_Storage_Entry) -> *Sparse_Set(T) #must {
-    return cast(*Sparse_Set(T)) entry.storage;
+as_sparse_set :: inline (entry: *Sparse_Storage_Entry) -> *Sparse_Set #must {
+    return entry.storage;
 }

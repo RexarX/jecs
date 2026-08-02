@@ -2,18 +2,19 @@
 
 DEFAULT_PAGED_SPARSE_PAGE_BITS :: 12;
 
-Paged_Sparse_Array :: struct (page_bits := DEFAULT_PAGED_SPARSE_PAGE_BITS) {
-    page_table: [..] *My_Page;
-    allocator: Allocator;
-
-    My_Page :: Page(page_bits);
-}
-
 Page :: struct (page_bits: s64) {
     slots: [1 << page_bits] Entity.Index;
 }
 
-init :: (array: *Paged_Sparse_Array($page_bits), allocator: Allocator = .{}) {
+Paged_Sparse_Array :: struct (page_bits := DEFAULT_PAGED_SPARSE_PAGE_BITS) {
+    page_table: [..] *My_Page;
+    allocator:  Allocator;
+
+    My_Page :: Page(page_bits);
+}
+
+init :: inline (array: *Paged_Sparse_Array($page_bits),
+                allocator: Allocator = .{}) {
     array.allocator = resolve_allocator(array, allocator);
     array.page_table.allocator = array.allocator;
 }
@@ -35,7 +36,8 @@ clear :: (using array: *Paged_Sparse_Array($page_bits)) {
     }
 }
 
-assign :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.Index, value: Entity.Index) {
+assign :: (using array: *Paged_Sparse_Array($page_bits),
+           entity_index: Entity.Index, value: Entity.Index) {
     page_i := cast(s64) entity_index >> page_bits;
     ensure_page_capacity(array, page_i);
 
@@ -52,7 +54,8 @@ assign :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.In
     page.slots[slot] = value;
 }
 
-clear_index :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.Index) -> bool {
+clear_index :: (using array: *Paged_Sparse_Array($page_bits),
+                entity_index: Entity.Index) -> bool {
     page_i := cast(s64) entity_index >> page_bits;
     if page_i >= page_table.count return false;
 
@@ -66,13 +69,15 @@ clear_index :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Enti
     return true;
 }
 
-get :: inline (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.Index) -> Entity.Index #must {
+get :: inline (using array: *Paged_Sparse_Array($page_bits),
+               entity_index: Entity.Index) -> Entity.Index #must {
     value, ok := try_get(array, entity_index);
-    assert(ok, "Paged_Sparse_Array: index % is not present!", entity_index);
+    assert(ok, "Entity index % is not present!", entity_index);
     return value;
 }
 
-try_get :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.Index) -> Entity.Index, bool #must {
+try_get :: (using array: *Paged_Sparse_Array($page_bits),
+            entity_index: Entity.Index) -> Entity.Index, bool #must {
     page_i := cast(s64) entity_index >> page_bits;
     if page_i >= page_table.count return Entity.INVALID_INDEX, false;
 
@@ -85,7 +90,8 @@ try_get :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.I
     return value, true;
 }
 
-contains :: (using array: *Paged_Sparse_Array($page_bits), entity_index: Entity.Index) -> bool #must {
+contains :: (using array: *Paged_Sparse_Array($page_bits),
+             entity_index: Entity.Index) -> bool #must {
     page_i := cast(s64) entity_index >> page_bits;
     if page_i >= page_table.count return false;
 

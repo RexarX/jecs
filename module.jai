@@ -7,8 +7,8 @@
 #load "src/component/sparse_set.jai";
 #load "src/component/sparse_set_storage.jai";
 
-#load "src/entity/entities.jai";
 #load "src/entity/entity.jai";
+#load "src/entity/entities.jai";
 
 #load "src/util.jai";
 #load "src/world.jai";

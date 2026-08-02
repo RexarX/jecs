@@ -13,7 +13,7 @@ my_project/
 ```
 
 ```jai
-#import "jecs";
+Jecs :: #import "jecs";
 ```
 
 The folder name must be `jecs` — the compiler resolves `#import "jecs"` to `modules/jecs/module.jai`.
@@ -41,7 +41,7 @@ options.import_path = import_path;
 jai build.jai
 ```
 
-Build presets: `-debug` (default), `-relwithdebinfo`, `-release`
+Build presets: `-debug` (default), `-relwithdebinfo`, `-release` (can be combined to build multiple presets in parallel).
 
 ```bash
 jai build.jai - -release

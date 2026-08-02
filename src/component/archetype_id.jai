@@ -2,31 +2,25 @@
 #import "Hash";
 
 Archetype_Id :: struct {
-    types: [..] *Type_Info;
-    hash: u64;
+    types:     [..] *Type_Info;
+    hash:      u64;
+
     allocator: Allocator;
 }
 
-make_archetype_id_from_types :: (types: [] *Type_Info, allocator: Allocator = .{}) -> Archetype_Id #must {
-    id: Archetype_Id;
-    init(*id, allocator);
-    for types array_add(*id.types, it);
-    sort_and_deduplicate(*id);
-    return id;
-}
+make_archetype_id :: (values: .. Any,
+                      allocator: Allocator = .{}) -> Archetype_Id #must {
+    assert(values.count > 0, "Requires at least one component value!");
 
-make_archetype_id_from :: ($T: Type, $U: Type = void, $V: Type = void) -> Archetype_Id #must {
     push_allocator(temp);
 
     types: [..] *Type_Info;
     types.allocator = temp;
-    array_add(*types, type_info(T));
-    #if U != void array_add(*types, type_info(U));
-    #if V != void array_add(*types, type_info(V));
-    return make_archetype_id_from_types(types);
+    for values array_add(*types, it.type);
+    return build_archetype_id(types, allocator);
 }
 
-init :: (id: *Archetype_Id, allocator: Allocator = .{}) {
+init :: inline (id: *Archetype_Id, allocator: Allocator = .{}) {
     id.allocator = resolve_allocator(id, allocator);
     id.types.allocator = id.allocator;
 }
@@ -36,12 +30,12 @@ reset :: inline (using id: *Archetype_Id) {
     hash = 0;
 }
 
-clear :: (using id: *Archetype_Id) {
+clear :: inline (using id: *Archetype_Id) {
     array_reset_keeping_memory(*types);
     hash = 0;
 }
 
-duplicate :: (id: Archetype_Id) -> Archetype_Id #must {
+clone :: (id: Archetype_Id) -> Archetype_Id #must {
     result: Archetype_Id;
     init(*result, id.allocator);
     for id.types array_add(*result.types, it);
@@ -53,8 +47,8 @@ with :: inline (id: *Archetype_Id, $T: Type) {
     with_type(id, type_info(T));
 }
 
-with_type :: (id: *Archetype_Id, type_info_ptr: *Type_Info) {
-    if contains(id, type_info_ptr) return;
+with_type :: inline (id: *Archetype_Id, type_info_ptr: *Type_Info) {
+    if contains_component(id, type_info_ptr) return;
 
     array_add(*id.types, type_info_ptr);
     sort_and_deduplicate(id);
@@ -65,7 +59,7 @@ without :: inline (id: *Archetype_Id, $T: Type) {
 }
 
 without_type :: (id: *Archetype_Id, type_info_ptr: *Type_Info) {
-    if !contains(id, type_info_ptr) return;
+    if !contains_component(id, type_info_ptr) return;
 
     new_count: s64 = 0;
     for id.types {
@@ -78,11 +72,12 @@ without_type :: (id: *Archetype_Id, type_info_ptr: *Type_Info) {
     get_hash(id);
 }
 
-contains :: inline (using id: *Archetype_Id, $T: Type) -> bool #must {
-    return contains(id, type_info(T));
+contains_component :: inline (using id: *Archetype_Id, $T: Type) -> bool #must {
+    return contains_component(id, type_info(T));
 }
 
-contains :: (using id: *Archetype_Id, type_info_ptr: *Type_Info) -> bool #must {
+contains_component :: (using id: *Archetype_Id,
+                       type_info_ptr: *Type_Info) -> bool #must {
     for types {
         if it == type_info_ptr return true;
     }
@@ -102,6 +97,15 @@ get_hash :: (using id: *Archetype_Id) {
 }
 
 #scope_module;
+
+build_archetype_id :: (types: [] *Type_Info,
+                       allocator: Allocator = .{}) -> Archetype_Id #must {
+    id: Archetype_Id;
+    init(*id, allocator);
+    for types array_add(*id.types, it);
+    sort_and_deduplicate(*id);
+    return id;
+}
 
 sort_and_deduplicate :: (using id: *Archetype_Id) {
     if types.count <= 1 {

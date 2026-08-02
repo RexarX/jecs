@@ -2,36 +2,36 @@
 #import "Basic";
 
 Entities :: struct {
-    generations: [..] Entity.Generation;
+    generations:  [..] Entity.Generation;
     free_indices: [..] Entity.Index;
-    count: Entity.Index = 0;
+    count:        Entity.Index = 0;
 
-    next_index: Entity.Index = 0;
+    next_index:   Entity.Index = 0;
     // When flushed: free_cursor == free_indices.count (remaining freelist).
     // reserve_entity decrements it: freelist first, then negative for brand-new IDs.
-    free_cursor: s64 = 0;
+    free_cursor:  s64 = 0;
 
-    allocator: Allocator;
+    allocator:    Allocator;
 }
 
-init :: (entities: *Entities, allocator: Allocator = .{}) {
+init :: inline (entities: *Entities, allocator: Allocator = .{}) {
     entities.allocator = resolve_allocator(entities, allocator);
 
     entities.generations.allocator  = entities.allocator;
     entities.free_indices.allocator = entities.allocator;
 }
 
-clear :: (using entities: *Entities) {
-    array_reset_keeping_memory(*generations);
-    array_reset_keeping_memory(*free_indices);
+reset :: (using entities: *Entities) {
+    array_reset(*generations);
+    array_reset(*free_indices);
     count = 0;
     next_index = 0;
     free_cursor = 0;
 }
 
-reset :: (using entities: *Entities) {
-    array_reset(*generations);
-    array_reset(*free_indices);
+clear :: (using entities: *Entities) {
+    array_reset_keeping_memory(*generations);
+    array_reset_keeping_memory(*free_indices);
     count = 0;
     next_index = 0;
     free_cursor = 0;
@@ -56,45 +56,51 @@ reserve :: (entities: *Entities, count: s64) {
 // reserve_entity / validate_entity. Those paths can array_resize generations and
 // move generations.data, racing with atomic_read(generations.data + index).
 // Typical usage: workers only reserve_entity; main thread joins, then flush.
-reserve_entity :: (using entities: *Entities) -> Entity {
+reserve_entity :: (using entities: *Entities) -> Entity #must {
     // Atomically claim one slot: freelist first, then brand-new indices.
     // Do NOT mutate generations / count here — concurrent callers only touch
     // free_cursor. Metadata is materialized in flush_reserved_entities.
     n := atomic_add(*free_cursor, -1);
     if n > 0 {
         index := free_indices[n - 1];
-        // Destroy publishes the next generation before the index hits the
-        // freelist; reading it here is wait-free and does not mutate metadata.
+        // Destroy publishes the free generation before the index hits the freelist;
+        // reserve hands out the future alive generation.
         // Safe only while generations.data is stable (see contract above).
-        generation := atomic_read(generations.data + cast(s64) index);
+        free_generation := atomic_read(generations.data + cast(s64) index);
+        generation := next_generation(free_generation);
         return .{index = index, generation = generation};
     }
 
     // free_cursor is 0 or negative: hand out a fresh index at/after next_index.
     // As the cursor goes more negative, indices extend farther.
     index := cast(Entity.Index) (cast(s64) atomic_read(*next_index) - n);
-    return .{index = index, generation = 1};
+    return .{index = index, generation = Entity.FIRST_ALIVE_GENERATION};
 }
 
-create_entity :: (using entities: *Entities) -> Entity {
-    assert(!needs_flush(entities), "flush_reserved_entities must be called before create_entity");
+create_entity :: (using entities: *Entities) -> Entity #must {
+    assert(!needs_flush(entities),
+           "flush_reserved_entities must be called before create_entity!");
 
     if free_cursor > 0 {
         index := pop_free_index(entities);
-        return create_entity_with_id(entities, index, generations[cast(s64) index]);
+        free_generation := generations[cast(s64) index];
+        alive_generation := next_generation(free_generation);
+        return create_entity_with_id(entities, index, alive_generation);
     }
 
     index := next_index;
     next_index += 1;
-    return create_entity_with_id(entities, index, 1);
+    return create_entity_with_id(entities, index, Entity.FIRST_ALIVE_GENERATION);
 }
 
 destroy_entity :: (using entities: *Entities, entity: Entity) {
     assert(is_valid(entity), "Cannot destroy invalid entity %!", entity);
-    assert(!needs_flush(entities), "flush_reserved_entities must be called before destroy_entity");
+    assert(!needs_flush(entities),
+           "flush_reserved_entities must be called before destroy_entity!");
     if !validate_entity(entities, entity) return;
 
-    generations[cast(s64) entity.index] += 1;
+    next_gen := next_generation(entity.generation, alive = false);
+    generations[cast(s64) entity.index] = next_gen;
     array_add(*free_indices, entity.index);
     sync_free_cursor_to_list(entities);
     count -= 1;
@@ -107,7 +113,7 @@ validate_entity :: (using entities: *Entities, entity: Entity) -> bool #must {
 
     generation := atomic_read(generations.data + cast(s64) entity.index);
     if generation != entity.generation return false;
-    if generation == Entity.INVALID_GENERATION return false;
+    if !is_alive_generation(generation) return false;
     return true;
 }
 
@@ -130,7 +136,7 @@ flush_reserved_entities :: (using entities: *Entities) {
         }
 
         for i: cast(s64) old_next..cast(s64) new_next - 1 {
-            generations[i] = 1;
+            generations[i] = Entity.FIRST_ALIVE_GENERATION;
         }
 
         new_entities_count += freshly_reserved;
@@ -140,9 +146,16 @@ flush_reserved_entities :: (using entities: *Entities) {
 
     // Reserved freelist entries live in free_indices[new_free_cursor .. end).
     // Their generations were already bumped in destroy_entity.
-    assert(new_free_cursor <= free_indices.count, "free_cursor is out of sync with free list!");
+    assert(new_free_cursor <= free_indices.count,
+           "free_cursor is out of sync with free list!");
     recycled_reserved := free_indices.count - new_free_cursor;
     new_entities_count += cast(Entity.Index) recycled_reserved;
+
+    for i: new_free_cursor..free_indices.count - 1 {
+        index := free_indices[i];
+        free_generation := generations[cast(s64) index];
+        generations[cast(s64) index] = next_generation(free_generation);
+    }
 
     free_indices.count = new_free_cursor;
     free_cursor = new_free_cursor;
@@ -162,7 +175,8 @@ get_reserved_entities :: inline (entities: *Entities) -> Reserved_Entities #must
     return .{entities = entities};
 }
 
-for_expansion :: (reserved: Reserved_Entities, body: Code, flags: For_Flags) #expand {
+for_expansion :: (reserved: Reserved_Entities, body: Code,
+                  flags: For_Flags) #expand {
     entities := reserved.entities;
 
     `it: Entity;
@@ -176,7 +190,9 @@ for_expansion :: (reserved: Reserved_Entities, body: Code, flags: For_Flags) #ex
         for i: freelist_start..entities.free_indices.count - 1 {
             index := entities.free_indices[i];
             it_index = index;
-            it = .{index = index, generation = entities.generations[cast(s64) index]};
+            free_generation := entities.generations[cast(s64) index];
+            it = .{index = index,
+                   generation = next_generation(free_generation)};
             #insert body;
         }
     }
@@ -188,7 +204,7 @@ for_expansion :: (reserved: Reserved_Entities, body: Code, flags: For_Flags) #ex
     for i: 0..(-cursor) - 1 {
         index := cast(Entity.Index) (old_next + i);
         it_index = index;
-        it = .{index = index, generation = 1};
+        it = .{index = index, generation = Entity.FIRST_ALIVE_GENERATION};
         #insert body;
     }
 }
@@ -206,7 +222,8 @@ pop_free_index :: inline (using entities: *Entities) -> Entity.Index {
     return index;
 }
 
-create_entity_with_id :: (using entities: *Entities, index: Entity.Index, generation: Entity.Generation) -> Entity {
+create_entity_with_id :: (using entities: *Entities, index: Entity.Index,
+                          generation: Entity.Generation) -> Entity #must {
     while generations.count <= cast(s64) index {
         array_add(*generations, Entity.INVALID_GENERATION);
     }

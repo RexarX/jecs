@@ -1,17 +1,18 @@
 #import "Basic";
 #import "Hash_Table";
 
-Archetype_Index :: #type,isa Entity.Index;
-Sparse_Index :: #type,isa Entity.Index;
+Archetype_Index         :: #type,isa Entity.Index;
+Sparse_Index            :: #type,isa Entity.Index;
 INVALID_ARCHETYPE_INDEX :: cast(Archetype_Index) Entity.INVALID_INDEX;
-INVALID_SPARSE_VALUE :: cast(Sparse_Index) Entity.INVALID_INDEX;
+INVALID_SPARSE_VALUE    :: cast(Sparse_Index) Entity.INVALID_INDEX;
 
 Entity_Index_Map :: Paged_Sparse_Array;
 
 Column :: struct {
-    type: *Type_Info;
-    stride: s64;
-    bytes: [..] u8;
+    type:      *Type_Info;
+    stride:    s64;
+    bytes:     [..] u8;
+
     allocator: Allocator;
 }
 
@@ -65,22 +66,36 @@ push_back_default :: inline (using column: *Column) {
 
 pop_back :: inline (using column: *Column) {
     if stride == 0 return;
-    if bytes.count >= stride {
-        bytes.count -= stride;
-    }
+    if bytes.count >= stride bytes.count -= stride;
 }
 
-at :: inline (using column: *Column, row: Row_Index, $T: Type) -> *T #must {
-    assert(column.type == type_info(T), "Column type mismatch for % component!", component_name(T));
-    return cast(*T) at(column, row);
+get_component :: inline (using column: *Column,
+                         row: Row_Index, $T: Type) -> *T #must {
+    assert(column.type == type_info(T), "Column type mismatch for % component!",
+           #run get_component_name(T));
+    return cast(*T) get_component(column, row);
 }
 
-at :: inline (using column: *Column, row: Row_Index) -> *void #must {
+get_component :: inline (using column: *Column, row: Row_Index) -> *void #must {
     row_count := ifx stride > 0 then bytes.count / stride else bytes.count;
-    assert(cast(s64) row * stride < bytes.count || (stride == 0 && cast(s64) row <= bytes.count),
-        "Column row % is out of bounds (row count %)!", row, row_count);
+    assert(cast(s64) row * stride < bytes.count
+           || (stride == 0 && cast(s64) row <= bytes.count),
+           "Column row % is out of bounds (row count %)!", row, row_count);
     if stride == 0 return null;
     return bytes.data + cast(s64) row * stride;
+}
+
+move_row_from_last :: (using column: *Column,
+                       dst_row: Row_Index, last_row: Row_Index) {
+    if dst_row == last_row return;
+    if stride == 0 return;
+
+    dst_offset := cast(s64) dst_row * stride;
+    last_offset := cast(s64) last_row * stride;
+    assert(dst_offset + stride <= bytes.count && last_offset + stride <= bytes.count,
+           "Cannot move row % from %: column has % bytes!",
+           dst_row, last_row, bytes.count);
+    memcpy(bytes.data + dst_offset, bytes.data + last_offset, stride);
 }
 
 swap_rows :: (using column: *Column, a: Row_Index, b: Row_Index) {
@@ -90,7 +105,7 @@ swap_rows :: (using column: *Column, a: Row_Index, b: Row_Index) {
     a_offset := cast(s64) a * stride;
     b_offset := cast(s64) b * stride;
     assert(a_offset + stride <= bytes.count && b_offset + stride <= bytes.count,
-        "Cannot swap rows % and %: column has % bytes!", a, b, bytes.count);
+           "Cannot swap rows % and %: column has % bytes!", a, b, bytes.count);
 
     temp := alloc(stride,, allocator);
     defer free(temp,, allocator);
@@ -100,9 +115,10 @@ swap_rows :: (using column: *Column, a: Row_Index, b: Row_Index) {
 }
 
 Archetype_Edge_Cache :: struct {
-    add_edges: Table(*Type_Info, Archetype_Index);
+    add_edges:    Table(*Type_Info, Archetype_Index);
     remove_edges: Table(*Type_Info, Archetype_Index);
-    allocator: Allocator;
+
+    allocator:    Allocator;
 }
 
 init :: (cache: *Archetype_Edge_Cache, allocator: Allocator) {
@@ -119,13 +135,14 @@ deinit :: inline (cache: *Archetype_Edge_Cache) {
 }
 
 Archetype_Storage :: struct {
-    archetypes: [..] *Archetype;
-    archetype_map: Table(u64, Archetype_Index);
-    edge_caches: [..] Archetype_Edge_Cache;
-    entity_archetype_map: Entity_Index_Map;
+    archetypes:            [..] *Archetype;
+    archetype_map:         Table(u64, Archetype_Index);
+    edge_caches:           [..] Archetype_Edge_Cache;
+    entity_archetype_map:  Entity_Index_Map;
     empty_archetype_index: Archetype_Index = INVALID_ARCHETYPE_INDEX;
-    structural_version: u64;
-    allocator: Allocator;
+    structural_version:    u64;
+
+    allocator:             Allocator;
 }
 
 init :: (storage: *Archetype_Storage, allocator: Allocator = .{}) {
@@ -140,7 +157,7 @@ init :: (storage: *Archetype_Storage, allocator: Allocator = .{}) {
 
 reset :: (using storage: *Archetype_Storage) {
     for archetypes {
-        reset(it);
+        deinit(it);
         free(it,, allocator);
     }
     array_reset(*archetypes);
@@ -149,8 +166,6 @@ reset :: (using storage: *Archetype_Storage) {
     array_reset(*edge_caches);
 
     deinit(*archetype_map);
-    init(*archetype_map,, allocator);
-    archetype_map.allocator = allocator;
 
     reset(*entity_archetype_map);
     empty_archetype_index = INVALID_ARCHETYPE_INDEX;
@@ -163,14 +178,10 @@ clear :: (using storage: *Archetype_Storage) {
     structural_version = 0;
 }
 
-get_archetype :: inline (using storage: *Archetype_Storage, index: Archetype_Index) -> *Archetype #must {
-    assert(index != INVALID_ARCHETYPE_INDEX && cast(s64) index < archetypes.count,
-        "Invalid archetype index % (count %)!", index, archetypes.count);
-    return archetypes[index];
-}
-
 ensure_empty_archetype :: (using storage: *Archetype_Storage) -> Archetype_Index {
-    if empty_archetype_index != INVALID_ARCHETYPE_INDEX return empty_archetype_index;
+    if empty_archetype_index != INVALID_ARCHETYPE_INDEX {
+        return empty_archetype_index;
+    }
 
     id: Archetype_Id;
     init(*id, allocator);
@@ -179,9 +190,20 @@ ensure_empty_archetype :: (using storage: *Archetype_Storage) -> Archetype_Index
     return empty_archetype_index;
 }
 
-get_or_create_archetype :: (using storage: *Archetype_Storage, id: Archetype_Id) -> Archetype_Index {
+get_archetype :: inline (using storage: *Archetype_Storage,
+                         index: Archetype_Index) -> *Archetype #must {
+    assert(index != INVALID_ARCHETYPE_INDEX && cast(s64) index < archetypes.count,
+           "Invalid archetype index % (count %)!", index, archetypes.count);
+    return archetypes[index];
+}
+
+get_or_create_archetype :: (using storage: *Archetype_Storage,
+                            id: Archetype_Id) -> Archetype_Index {
     arch_index, found := table_find(*archetype_map, id.hash);
-    if found return arch_index;
+    if found {
+        arch := get_archetype(storage, arch_index);
+        if archetype_ids_equal(arch.id, id) return arch_index;
+    }
 
     arch := New(Archetype,, allocator);
     init(arch, id, allocator);
@@ -197,39 +219,53 @@ get_or_create_archetype :: (using storage: *Archetype_Storage, id: Archetype_Id)
     return arch_index;
 }
 
-get_archetype_index_by_id :: inline (using storage: *Archetype_Storage, id: Archetype_Id) -> Archetype_Index, bool #must {
+get_or_create_archetype_add_edge :: (using storage: *Archetype_Storage,
+                                     src_index: Archetype_Index,
+                                     type_info_ptr: *Type_Info) -> Archetype_Index {
+    cache := *edge_caches[src_index];
+    dst_index, found := table_find(*cache.add_edges, type_info_ptr);
+    if found return dst_index;
+
+    src := get_archetype(storage, src_index);
+    target_id := clone(src.id);
+    with_type(*target_id, type_info_ptr);
+    dst_index = get_or_create_archetype(storage, target_id);
+    reset(*target_id);
+    table_add(*cache.add_edges, type_info_ptr, dst_index);
+    return dst_index;
+}
+
+get_or_create_archetype_remove_edge :: (using storage: *Archetype_Storage,
+                                        src_index: Archetype_Index,
+                                        type_info_ptr: *Type_Info) -> Archetype_Index {
+    cache := *edge_caches[src_index];
+    dst_index, found := table_find(*cache.remove_edges, type_info_ptr);
+    if found return dst_index;
+
+    src := get_archetype(storage, src_index);
+    target_id := clone(src.id);
+    without_type(*target_id, type_info_ptr);
+    dst_index = get_or_create_archetype(storage, target_id);
+    reset(*target_id);
+    table_add(*cache.remove_edges, type_info_ptr, dst_index);
+    return dst_index;
+}
+
+get_archetype_index_by_id :: inline (using storage: *Archetype_Storage,
+                                     id: Archetype_Id) -> Archetype_Index, bool #must {
     index, found := table_find(*archetype_map, id.hash);
     return index, found;
 }
 
-is_tracked_entity :: inline (using storage: *Archetype_Storage, entity: Entity) -> bool #must {
-    if !is_valid(entity) return false;
-    return contains(*entity_archetype_map, entity.index);
-}
-
-try_get_entity_archetype_index :: inline (using storage: *Archetype_Storage, entity: Entity) -> Archetype_Index, bool #must {
-    value, ok := try_get(*entity_archetype_map, entity.index);
-    if !ok return INVALID_ARCHETYPE_INDEX, false;
-    return cast(Archetype_Index) value, true;
-}
-
-get_entity_archetype_index :: inline (using storage: *Archetype_Storage, entity: Entity) -> Archetype_Index #must {
-    index, ok := try_get_entity_archetype_index(storage, entity);
-    assert(ok, "Entity % is not tracked by archetype storage!", entity);
-    return index;
-}
-
-assign_entity_archetype_index :: inline (using storage: *Archetype_Storage, entity_index: Entity.Index, arch_index: Archetype_Index) {
+assign_entity_archetype_index :: inline (using storage: *Archetype_Storage,
+                                         entity_index: Entity.Index,
+                                         arch_index: Archetype_Index) {
     assign(*entity_archetype_map, entity_index, cast(Sparse_Index) arch_index);
 }
 
 // src/dst columns follow sorted Archetype_Id.types — merge-walk instead of hash lookups.
-migrate_entity :: (
-    using storage: *Archetype_Storage,
-    entity: Entity,
-    src_index: Archetype_Index,
-    dst_index: Archetype_Index
-) {
+migrate_entity :: (using storage: *Archetype_Storage, entity: Entity,
+                   src_index: Archetype_Index, dst_index: Archetype_Index) {
     if src_index == dst_index return;
 
     src := get_archetype(storage, src_index);
@@ -248,7 +284,8 @@ migrate_entity :: (
             src_col := *src.columns[src_i];
             dst_col := *dst.columns[dst_i];
             if dst_col.stride > 0 {
-                memcpy(at(dst_col, dst_row), at(src_col, src_row), dst_col.stride);
+                memcpy(get_component(dst_col, dst_row),
+                       get_component(src_col, src_row), dst_col.stride);
             }
             src_i += 1;
             dst_i += 1;
@@ -268,6 +305,36 @@ migrate_entity :: (
     structural_version += 1;
 }
 
-archetype_count :: inline (using storage: *Archetype_Storage) -> s64 #must {
+is_tracked_entity :: inline (using storage: *Archetype_Storage,
+                             entity: Entity) -> bool #must {
+    if !is_valid(entity) return false;
+    return contains(*entity_archetype_map, entity.index);
+}
+
+try_get_entity_archetype_index :: inline (using storage: *Archetype_Storage,
+                                          entity: Entity) -> Archetype_Index, bool #must {
+    value, ok := try_get(*entity_archetype_map, entity.index);
+    if !ok return INVALID_ARCHETYPE_INDEX, false;
+    return cast(Archetype_Index) value, true;
+}
+
+get_entity_archetype_index :: inline (using storage: *Archetype_Storage,
+                                      entity: Entity) -> Archetype_Index #must {
+    index, ok := try_get_entity_archetype_index(storage, entity);
+    assert(ok, "Entity % is not tracked by archetype storage!", entity);
+    return index;
+}
+
+get_archetype_count :: inline (using storage: *Archetype_Storage) -> s64 #must {
     return archetypes.count;
+}
+
+#scope_module;
+
+archetype_ids_equal :: (a: Archetype_Id, b: Archetype_Id) -> bool #must {
+    if a.types.count != b.types.count return false;
+    for i: 0..a.types.count - 1 {
+        if a.types[i] != b.types[i] return false;
+    }
+    return true;
 }

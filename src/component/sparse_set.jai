@@ -1,48 +1,45 @@
 #import "Basic";
 
-Dense_Index :: #type,isa Entity.Index;
+Dense_Index         :: #type,isa Entity.Index;
 INVALID_DENSE_INDEX :: cast(Dense_Index) Entity.INVALID_INDEX;
 
-Sparse_Set :: struct (T: Type) {
-    pages: Paged_Sparse_Array;
-    dense: [..] Entity.Index;
-    #if size_of(T) > 0 {
-        values: [..] T;
-    }
+Sparse_Set :: struct {
+    pages:     Paged_Sparse_Array;
+    dense:     [..] Entity.Index;
+    bytes:     [..] u8;
+    stride:    s64;
+    type:      *Type_Info;
+
     allocator: Allocator;
 }
 
-init :: inline (set: *Sparse_Set($T), allocator: Allocator = .{}) {
+init :: (set: *Sparse_Set, type_info_ptr: *Type_Info,
+         allocator: Allocator = .{}) {
     set.allocator = resolve_allocator(set, allocator);
+    set.type = type_info_ptr;
+    set.stride = type_info_ptr.runtime_size;
+    if set.stride < 0 set.stride = 0;
 
     init(*set.pages, set.allocator);
     set.dense.allocator = set.allocator;
-    #if size_of(T) > 0 {
-        set.values.allocator = set.allocator;
-    }
+    set.bytes.allocator = set.allocator;
 }
 
-reset :: inline (using set: *Sparse_Set($T)) {
+reset :: inline (using set: *Sparse_Set) {
     reset(*pages);
     array_reset(*dense);
-    #if size_of(T) > 0 {
-        array_reset(*values);
-    }
+    array_reset(*bytes);
 }
 
-clear :: inline (using set: *Sparse_Set($T)) {
+clear :: inline (using set: *Sparse_Set) {
     clear(*pages);
     array_reset_keeping_memory(*dense);
-    #if size_of(T) > 0 {
-        array_reset_keeping_memory(*values);
-    }
+    array_reset_keeping_memory(*bytes);
 }
 
-reserve :: (using set: *Sparse_Set($T), count: s64) {
+reserve :: (using set: *Sparse_Set, count: s64) {
     array_reserve(*dense, count);
-    #if size_of(T) > 0 {
-        array_reserve(*values, count);
-    }
+    if stride > 0 array_reserve(*bytes, count * stride);
 
     if count > 0 {
         last_index := cast(Entity.Index) (count - 1);
@@ -51,60 +48,88 @@ reserve :: (using set: *Sparse_Set($T), count: s64) {
     }
 }
 
-assign :: inline (using set: *Sparse_Set($T), entity: Entity, value: T) {
-    insert(set, entity.index, value);
+assign_component :: inline (using set: *Sparse_Set, entity: Entity, value: $T) {
+    assert(type == type_info(T), "Sparse set type mismatch for %!",
+           #run get_component_name(T));
+    insert_bytes(set, entity.index, xx *value);
 }
 
-try_assign :: inline (using set: *Sparse_Set($T), entity: Entity, value: T) -> bool {
-    return try_insert(set, entity.index, value);
+assign_component_bytes :: inline (using set: *Sparse_Set,
+                                  entity: Entity, data: *void) {
+    insert_bytes(set, entity.index, data);
 }
 
-erase :: inline (using set: *Sparse_Set($T), entity: Entity) {
+try_assign_component :: inline (using set: *Sparse_Set,
+                               entity: Entity, value: $T) -> bool {
+    assert(type == type_info(T), "Sparse set type mismatch for %!",
+           #run get_component_name(T));
+    return try_insert_bytes(set, entity.index, xx *value);
+}
+
+try_assign_component_bytes :: inline (using set: *Sparse_Set,
+                                      entity: Entity, data: *void) -> bool {
+    return try_insert_bytes(set, entity.index, data);
+}
+
+erase_entity :: inline (using set: *Sparse_Set, entity: Entity) {
     remove_index(set, entity.index);
 }
 
-try_erase :: inline (using set: *Sparse_Set($T), entity: Entity) -> bool {
+try_erase_entity :: inline (using set: *Sparse_Set, entity: Entity) -> bool {
     return remove_index(set, entity.index);
 }
 
-get :: inline (using set: *Sparse_Set($T), entity: Entity) -> *T #must {
-    return get(set, entity.index);
+get_component :: inline (using set: *Sparse_Set,
+                         entity: Entity, $T: Type) -> *T #must {
+    return get_component(set, entity.index, T);
 }
 
-try_get :: inline (using set: *Sparse_Set($T), entity: Entity) -> *T #must {
-    return try_get(set, entity.index);
+try_get_component :: inline (using set: *Sparse_Set,
+                             entity: Entity, $T: Type) -> *T #must {
+    return try_get_component(set, entity.index, T);
 }
 
-contains :: inline (using set: *Sparse_Set($T), entity: Entity) -> bool #must {
-    return contains(set, entity.index);
+contains_entity :: inline (using set: *Sparse_Set,
+                           entity: Entity) -> bool #must {
+    return contains_entity(set, entity.index);
 }
 
-insert :: (using set: *Sparse_Set($T), entity_index: Entity.Index, value: T) -> Dense_Index {
+insert_bytes :: (using set: *Sparse_Set,
+                 entity_index: Entity.Index, data: *void) -> Dense_Index {
     dense_index, ok := try_get_dense_index(set, entity_index);
     if ok {
-        #if size_of(T) > 0 {
-            values[dense_index] = value;
+        if stride > 0 && data {
+            memcpy(bytes.data + cast(s64) dense_index * stride, data, stride);
         }
         return dense_index;
     }
 
     dense_index = cast(Dense_Index) dense.count;
     array_add(*dense, entity_index);
-    #if size_of(T) > 0 {
-        array_add(*values, value);
+    if stride > 0 {
+        old_count := bytes.count;
+        new_count := old_count + stride;
+        array_reserve(*bytes, new_count);
+        bytes.count = new_count;
+        if data {
+            memcpy(bytes.data + old_count, data, stride);
+        } else {
+            memset(bytes.data + old_count, 0, stride);
+        }
     }
 
     assign(*pages, entity_index, cast(Entity.Index) dense_index);
     return dense_index;
 }
 
-try_insert :: inline (using set: *Sparse_Set($T), entity_index: Entity.Index, value: T) -> bool {
-    if contains(set, entity_index) return false;
-    insert(set, entity_index, value);
+try_insert_bytes :: inline (using set: *Sparse_Set,
+                            entity_index: Entity.Index, data: *void) -> bool {
+    if contains_entity(set, entity_index) return false;
+    insert_bytes(set, entity_index, data);
     return true;
 }
 
-remove_index :: (using set: *Sparse_Set($T), entity_index: Entity.Index) -> bool {
+remove_index :: (using set: *Sparse_Set, entity_index: Entity.Index) -> bool {
     dense_index, ok := try_get_dense_index(set, entity_index);
     if !ok return false;
 
@@ -114,86 +139,91 @@ remove_index :: (using set: *Sparse_Set($T), entity_index: Entity.Index) -> bool
         dense[dense_index] = swapped_index;
         assign(*pages, swapped_index, cast(Entity.Index) dense_index);
 
-        #if size_of(T) > 0 {
-            // Large T: memcpy avoids a full struct assignment temporary.
-            #if size_of(T) > 16 {
-                memcpy(*values[dense_index], *values[last], size_of(T));
-            } else {
-                values[dense_index] = values[last];
-            }
+        if stride > 0 {
+            memcpy(bytes.data + cast(s64) dense_index * stride,
+                   bytes.data + last * stride,
+                   stride);
         }
     }
 
     dense.count = last;
-    #if size_of(T) > 0 {
-        values.count = last;
-    }
+    if stride > 0 bytes.count = last * stride;
 
     clear_index(*pages, entity_index);
     return true;
 }
 
-get :: inline (using set: *Sparse_Set($T), entity_index: Entity.Index) -> *T #must {
-    result := try_get(set, entity_index);
-    assert(result != null, "Entity index % does not have sparse component!", entity_index);
+get_component :: inline (using set: *Sparse_Set,
+                         entity_index: Entity.Index, $T: Type) -> *T #must {
+    result := try_get_component(set, entity_index, T);
+    assert(result != null, "Entity index % does not have sparse component!",
+           entity_index);
     return result;
 }
 
-try_get :: inline (using set: *Sparse_Set($T), entity_index: Entity.Index) -> *T #must {
+try_get_component :: inline (using set: *Sparse_Set,
+                             entity_index: Entity.Index, $T: Type) -> *T #must {
+    #assert size_of(T) > 0 "Use contains_entity() for tag components; try_get_component requires a value type!";
+    assert(type == type_info(T), "Sparse set type mismatch for %!",
+           #run get_component_name(T));
+
     dense_index, ok := try_get_dense_index(set, entity_index);
     if !ok return null;
-    #if size_of(T) == 0 {
-        return null;
-    } else {
-        return *values[dense_index];
-    }
+    return cast(*T) (bytes.data + cast(s64) dense_index * stride);
 }
 
-try_get_dense_index :: inline (using set: *Sparse_Set($T), entity_index: Entity.Index) -> Dense_Index, bool #must {
+try_get_bytes :: inline (using set: *Sparse_Set,
+                         entity_index: Entity.Index) -> *void #must {
+    dense_index, ok := try_get_dense_index(set, entity_index);
+    if !ok return null;
+    if stride == 0 return null;
+    return bytes.data + cast(s64) dense_index * stride;
+}
+
+try_get_dense_index :: inline (using set: *Sparse_Set,
+                               entity_index: Entity.Index) -> Dense_Index, bool #must {
     value, ok := try_get(*pages, entity_index);
     if !ok return INVALID_DENSE_INDEX, false;
     return cast(Dense_Index) value, true;
 }
 
-contains :: inline (using set: *Sparse_Set($T), entity_index: Entity.Index) -> bool #must {
+contains_entity :: inline (using set: *Sparse_Set,
+                           entity_index: Entity.Index) -> bool #must {
     return contains(*pages, entity_index);
 }
 
-data :: inline (using set: *Sparse_Set($T)) -> [] T #must {
-    #if size_of(T) > 0 {
-        return values;
-    } else {
-        return .[];
-    }
+get_data :: inline (using set: *Sparse_Set, $T: Type) -> [] T #must {
+    #assert size_of(T) > 0;
+    assert(type == type_info(T), "Sparse set type mismatch for %!",
+           #run get_component_name(T));
+    if dense.count == 0 return .[];
+    result: [] T;
+    result.data = cast(*T) bytes.data;
+    result.count = dense.count;
+    return result;
 }
 
-size :: inline (using set: *Sparse_Set($T)) -> s64 #must {
+get_size :: inline (using set: *Sparse_Set) -> s64 #must {
     return dense.count;
 }
 
-get_dense_entities :: inline (using set: *Sparse_Set($T)) -> [] Entity.Index #must {
+get_dense_entities :: inline (using set: *Sparse_Set) -> [] Entity.Index #must {
     return dense;
 }
 
-for_expansion :: (set: *Sparse_Set($T), body: Code, flags: For_Flags) #expand {
+for_expansion :: (set: *Sparse_Set, body: Code, flags: For_Flags) #expand {
     `it_index: s64;
     `it_entity_index: Entity.Index;
-    #if size_of(T) > 0 {
-        `it: T;
-    }
+    `it: *void;
 
-    #if size_of(T) > 0 {
-        for i: 0..set.dense.count - 1 {
-            it_index = i;
-            it_entity_index = set.dense[i];
-            it = set.values[i];
-            #insert body;
+    for i: 0..set.dense.count - 1 {
+        it_index = i;
+        it_entity_index = set.dense[i];
+        if set.stride > 0 {
+            it = set.bytes.data + i * set.stride;
+        } else {
+            it = null;
         }
-    } else {
-        for i: 0..set.dense.count - 1 {
-            it_index = i;
-            it_entity_index = set.dense[i];
-            #insert body;
-        }
+        #insert body;
     }
 }

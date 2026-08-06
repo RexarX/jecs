@@ -12,6 +12,11 @@ init :: inline (world: *World, allocator: Allocator = .{}) {
     init(*world.components, world.allocator);
 }
 
+deinit :: inline (using world: *World) {
+    deinit(*components);
+    deinit(*entities);
+}
+
 reset :: inline (using world: *World) {
     reset(*components);
     reset(*entities);

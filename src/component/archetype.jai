@@ -37,27 +37,47 @@ init :: (archetype: *Archetype, id: Archetype_Id, allocator: Allocator = .{}) {
 }
 
 deinit :: (using archetype: *Archetype) {
-    for * columns reset(it);
-    array_reset(*columns);
-    reset(*entity_to_row);
-    array_reset(*entities);
+    cleanup_all_columns(archetype);
+    for * columns deinit(it);
+    array_free(columns);
+    deinit(*entity_to_row);
+    array_free(entities);
     deinit(*column_map);
-    reset(*id);
+    deinit(*id);
 }
 
 reset :: (using archetype: *Archetype) {
+    cleanup_all_columns(archetype);
     for * columns reset(it);
     reset(*entity_to_row);
-    array_reset(*entities);
-    deinit(*column_map);
-    init(*column_map,, allocator);
-    column_map.allocator = allocator;
+    if entities.data && entities.allocated {
+        memset(entities.data, 0, entities.allocated * size_of(Entity));
+    }
+    array_reset_keeping_memory(*entities);
 }
 
 clear :: (using archetype: *Archetype) {
+    cleanup_all_columns(archetype);
     for * columns clear(it);
-    clear(*entity_to_row);
+    for entity: entities clear_index(*entity_to_row, entity.index);
     array_reset_keeping_memory(*entities);
+}
+
+cleanup_all_columns :: (using archetype: *Archetype) {
+    row_count := entities.count;
+    if row_count <= 0 return;
+    for * col: columns {
+        if !col.on_remove || col.stride <= 0 continue;
+        for row_i: 0..row_count - 1 {
+            invoke_cleanup(col.on_remove,
+                           get_component(col, cast(Row_Index) row_i));
+        }
+    }
+}
+
+cleanup_column_row :: inline (column: *Column, row: Row_Index) {
+    if !column.on_remove || column.stride <= 0 return;
+    invoke_cleanup(column.on_remove, get_component(column, row));
 }
 
 allocate_row :: (using archetype: *Archetype, entity: Entity) -> Row_Index {
@@ -72,7 +92,20 @@ allocate_row :: (using archetype: *Archetype, entity: Entity) -> Row_Index {
     return row;
 }
 
+// Genuine destroy / clear: invoke on_remove for every column on the row.
 remove_entity :: (using archetype: *Archetype, entity: Entity) -> Entity {
+    assert(contains_entity(archetype, entity), "Entity % is not in archetype!",
+           entity);
+
+    row := cast(Row_Index) get(*entity_to_row, entity.index);
+    for * col: columns {
+        cleanup_column_row(col, row);
+    }
+    return remove_entity_raw(archetype, entity);
+}
+
+// Internal migrate path: no cleanup (caller already cleaned src-only columns).
+remove_entity_raw :: (using archetype: *Archetype, entity: Entity) -> Entity {
     assert(contains_entity(archetype, entity), "Entity % is not in archetype!",
            entity);
 
@@ -101,31 +134,42 @@ contains_entity :: inline (using archetype: *Archetype,
 
 assign_component :: inline (using archetype: *Archetype,
                             entity: Entity, value: $T) {
-    try_assign_component(archetype, entity, value);
+    try_assign_component_bytes(archetype, entity, type_info(T), xx *value,
+                               cleanup_old = true);
 }
 
 try_assign_component :: inline (using archetype: *Archetype,
                          entity: Entity, value: $T) -> bool {
     return try_assign_component_bytes(archetype, entity,
-                                      type_info(T), xx *value);
+                                      type_info(T), xx *value,
+                                      cleanup_old = false);
 }
 
 assign_component_bytes :: inline (using archetype: *Archetype, entity: Entity,
-                                  type_info_ptr: *Type_Info, data: *void) {
-    try_assign_component_bytes(archetype, entity, type_info_ptr, data);
+                                  type_info_ptr: *Type_Info, data: *void,
+                                  cleanup_old := true) {
+    try_assign_component_bytes(archetype, entity, type_info_ptr, data,
+                               cleanup_old);
 }
 
+// cleanup_old=true: overwrite an existing live value (invoke on_remove first).
+// cleanup_old=false: first write after migrate/allocate (zero-init is not live).
 try_assign_component_bytes :: (using archetype: *Archetype, entity: Entity,
-                               type_info_ptr: *Type_Info, data: *void) -> bool {
+                               type_info_ptr: *Type_Info, data: *void,
+                               cleanup_old := false) -> bool {
     col := try_get_column(archetype, type_info_ptr);
     if col == null return false;
 
     row := cast(Row_Index) get(*entity_to_row, entity.index);
     if col.stride == 0 return true;
+    dst := get_component(col, row);
+    if cleanup_old {
+        invoke_cleanup(col.on_remove, dst);
+    }
     if data {
-        memcpy(get_component(col, row), data, col.stride);
+        memcpy(dst, data, col.stride);
     } else {
-        memset(get_component(col, row), 0, col.stride);
+        memset(dst, 0, col.stride);
     }
     return true;
 }

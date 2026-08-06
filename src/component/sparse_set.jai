@@ -9,32 +9,57 @@ Sparse_Set :: struct {
     bytes:     [..] u8;
     stride:    s64;
     type:      *Type_Info;
+    on_remove: Component_Cleanup_Proc;
 
     allocator: Allocator;
 }
 
 init :: (set: *Sparse_Set, type_info_ptr: *Type_Info,
-         allocator: Allocator = .{}) {
+         allocator: Allocator = .{},
+         on_remove: Component_Cleanup_Proc = null) {
     set.allocator = resolve_allocator(set, allocator);
     set.type = type_info_ptr;
     set.stride = type_info_ptr.runtime_size;
     if set.stride < 0 set.stride = 0;
+    set.on_remove = on_remove;
 
     init(*set.pages, set.allocator);
     set.dense.allocator = set.allocator;
     set.bytes.allocator = set.allocator;
 }
 
+deinit :: (using set: *Sparse_Set) {
+    cleanup_all_entries(set);
+    deinit(*pages);
+    array_free(dense);
+    array_free(bytes);
+}
+
 reset :: inline (using set: *Sparse_Set) {
+    cleanup_all_entries(set);
     reset(*pages);
-    array_reset(*dense);
-    array_reset(*bytes);
+    if dense.data && dense.allocated {
+        memset(dense.data, 0, dense.allocated * size_of(Entity.Index));
+    }
+    if bytes.data && bytes.allocated {
+        memset(bytes.data, 0, bytes.allocated);
+    }
+    array_reset_keeping_memory(*dense);
+    array_reset_keeping_memory(*bytes);
 }
 
 clear :: inline (using set: *Sparse_Set) {
-    clear(*pages);
+    cleanup_all_entries(set);
+    for entity_index: dense clear_index(*pages, entity_index);
     array_reset_keeping_memory(*dense);
     array_reset_keeping_memory(*bytes);
+}
+
+cleanup_all_entries :: (using set: *Sparse_Set) {
+    if !on_remove || stride <= 0 || dense.count <= 0 return;
+    for i: 0..dense.count - 1 {
+        invoke_cleanup(on_remove, bytes.data + i * stride);
+    }
 }
 
 reserve :: (using set: *Sparse_Set, count: s64) {
@@ -99,7 +124,9 @@ insert_bytes :: (using set: *Sparse_Set,
     dense_index, ok := try_get_dense_index(set, entity_index);
     if ok {
         if stride > 0 && data {
-            memcpy(bytes.data + cast(s64) dense_index * stride, data, stride);
+            dst := bytes.data + cast(s64) dense_index * stride;
+            invoke_cleanup(on_remove, dst);
+            memcpy(dst, data, stride);
         }
         return dense_index;
     }
@@ -132,6 +159,10 @@ try_insert_bytes :: inline (using set: *Sparse_Set,
 remove_index :: (using set: *Sparse_Set, entity_index: Entity.Index) -> bool {
     dense_index, ok := try_get_dense_index(set, entity_index);
     if !ok return false;
+
+    if stride > 0 {
+        invoke_cleanup(on_remove, bytes.data + cast(s64) dense_index * stride);
+    }
 
     last := dense.count - 1;
     if dense_index != cast(Dense_Index) last {

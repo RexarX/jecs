@@ -10,50 +10,64 @@ infer_default_storage :: inline ($T: Type) -> Storage_Kind #must #compile_time {
     return .ARCHETYPE;
 }
 
-get_storage_kind :: ($T: Type) -> Storage_Kind #must #compile_time {
-    info :: type_info(T);
-    #if info.type == {
+infer_default_storage :: (info: *Type_Info) -> Storage_Kind #must {
+    if is_tag(info) return .SPARSE_SET;
+    return .ARCHETYPE;
+}
+
+has_note :: ($T: Type, key: string) -> bool #must {
+    return has_note(type_info(T), key);
+}
+
+has_note :: (info: *Type_Info, key: string) -> bool #must {
+    if info.type == {
         case .STRUCT;
-            struct_info :: cast(*Type_Info_Struct) info;
-            storage_kind :: #run try_get_storage_kind_member(struct_info);
-            #if storage_kind return <<storage_kind;
+            struct_info := cast(*Type_Info_Struct) info;
+            for struct_info.notes {
+                if it == key return true;
+            }
+            return false;
 
         case .VARIANT;
-            variant_info :: cast(*Type_Info_Variant) info;
-            #if variant_info.variant_of.type == .STRUCT {
-                struct_info :: cast(*Type_Info_Struct) variant_info.variant_of;
-                storage_kind :: #run try_get_storage_kind_member(struct_info);
-                #if storage_kind return <<storage_kind;
+            variant_info := cast(*Type_Info_Variant) info;
+            if variant_info.variant_of.type == .STRUCT {
+                struct_info := cast(*Type_Info_Struct) variant_info.variant_of;
+                return has_note(struct_info, key);
             }
     }
+    return false;
+}
 
-    return infer_default_storage(T);
+get_storage_kind :: ($T: Type) -> Storage_Kind #must #compile_time {
+    return #run get_storage_kind(type_info(T));
 }
 
 get_storage_kind :: (info: *Type_Info) -> Storage_Kind #must {
     if info.type == {
         case .STRUCT;
             struct_info := cast(*Type_Info_Struct) info;
-            storage_kind := try_get_storage_kind_member(struct_info);
-            if storage_kind return <<storage_kind;
+            if has_note(struct_info, "sparse") return .SPARSE_SET;
+            if has_note(struct_info, "archetype") return .ARCHETYPE;
 
         case .VARIANT;
-            variant_info := cast(*Type_Info_Variant) info;
-            if variant_info.variant_of.type == .STRUCT {
-                struct_info := cast(*Type_Info_Struct) variant_info.variant_of;
-                storage_kind := try_get_storage_kind_member(struct_info);
-                if storage_kind return <<storage_kind;
+            struct_info := try_get_struct_info(info);
+            if struct_info {
+                if has_note(struct_info, "sparse") return .SPARSE_SET;
+                if has_note(struct_info, "archetype") return .ARCHETYPE;
             }
     }
 
-    size := info.runtime_size;
-    if size < 0 size = 0;
-    if size == 0 return .SPARSE_SET;
-    return .ARCHETYPE;
+    return infer_default_storage(info);
 }
 
 is_tag :: inline ($T: Type) -> bool #must #compile_time {
     return size_of(T) == 0;
+}
+
+is_tag :: inline (info: *Type_Info) -> bool #must {
+    size := info.runtime_size;
+    if info.runtime_size <= 0 return true;
+    return false;
 }
 
 get_component_name :: ($T: Type) -> string #must #compile_time {
@@ -108,6 +122,14 @@ get_component_alignment :: ($T: Type) -> s64 #must #compile_time {
     return 1;
 }
 
+Component_Cleanup_Proc :: #type (data: *void);
+
+invoke_cleanup :: inline (on_remove: Component_Cleanup_Proc, data: *void) {
+    if on_remove && data {
+        on_remove(data);
+    }
+}
+
 Component_Metadata :: struct {
     type:         *Type_Info;
     name:         string;
@@ -115,17 +137,29 @@ Component_Metadata :: struct {
     alignment:    s64;
     storage_kind: Storage_Kind;
     is_tag:       bool;
+    on_remove:    Component_Cleanup_Proc; // null = POD, no-op
 }
 
-make_component_metadata :: inline ($T: Type) -> Component_Metadata #must {
-    return .{
+make_component_metadata :: inline ($T: Type) -> Component_Metadata #must #compile_time {
+    meta: Component_Metadata = .{
         type         = type_info(T),
         name         = #run get_component_name(T),
         size         = size_of(T),
         alignment    = #run get_component_alignment(T),
         storage_kind = #run get_storage_kind(T),
         is_tag       = #run is_tag(T),
+        on_remove    = null,
     };
+
+    #if #run has_on_remove_member(type_info(T)) {
+        #run validate_on_remove_signature(type_info(T));
+        trampoline :: (data: *void) {
+            T.JECS_ON_REMOVE(cast(*T) data);
+        }
+        meta.on_remove = trampoline;
+    }
+
+    return meta;
 }
 
 make_component_metadata :: (info: *Type_Info) -> Component_Metadata #must {
@@ -138,21 +172,77 @@ make_component_metadata :: (info: *Type_Info) -> Component_Metadata #must {
         alignment    = 1,
         storage_kind = get_storage_kind(info),
         is_tag       = size == 0,
+        on_remove    = null, // typed trampoline requires $T; register(T) first
     };
+}
+
+invoke_cleanup :: inline (meta: Component_Metadata, data: *void) {
+    invoke_cleanup(meta.on_remove, data);
+}
+
+has_on_remove_member :: ($T: Type) -> bool #must #compile_time {
+    return #run has_on_remove_member(type_info(T));
+}
+
+has_on_remove_member :: (info: *Type_Info) -> bool #must {
+    struct_info := try_get_struct_info(info);
+    if !struct_info return false;
+
+    for struct_info.members {
+        if it.name == "JECS_ON_REMOVE" && (it.flags & .CONSTANT) {
+            return true;
+        }
+    }
+    return false;
+}
+
+validate_on_remove_signature :: ($T: Type) #compile_time {
+    #run validate_on_remove_signature(type_info(T));
+}
+
+validate_on_remove_signature :: (info: *Type_Info) {
+    struct_info := try_get_struct_info(info);
+    assert(struct_info != null,
+           "JECS_ON_REMOVE requires a struct or struct-variant component!");
+
+    for struct_info.members {
+        if it.name == "JECS_ON_REMOVE" && (it.flags & .CONSTANT) {
+            assert(it.type.type == .PROCEDURE,
+                   "JECS_ON_REMOVE must be a procedure constant!");
+
+            proc_info := cast(*Type_Info_Procedure) it.type;
+
+            assert(proc_info.argument_types.count == 1,
+                   "JECS_ON_REMOVE must take exactly (*T) -> void!");
+            assert(proc_info.return_types.count == 0,
+                   "JECS_ON_REMOVE must return void!");
+
+            arg_type := proc_info.argument_types[0];
+            assert(arg_type.type == .POINTER,
+                   "JECS_ON_REMOVE's parameter must be *T!");
+            pointed := cast(*Type_Info_Pointer) arg_type;
+            // Declared on the struct (or its variant_of): accept *Component or *StructBase.
+            base_info := cast(*Type_Info) struct_info;
+            assert(pointed.pointer_to == info || pointed.pointer_to == base_info,
+                   "JECS_ON_REMOVE's parameter must be *T!");
+            return;
+        }
+    }
+    assert(false, "JECS_ON_REMOVE member not found!");
 }
 
 #scope_file;
 
-try_get_storage_kind_member :: (struct_info: *Type_Info_Struct) -> *Storage_Kind #must {
-    for struct_info.members {
-        if it.name == "JECS_STORAGE_KIND"
-           && it.type == type_info(Storage_Kind)
-           && (it.flags & .CONSTANT)
-           && it.offset_into_constant_storage >= 0 {
-            storage_kind_ptr := struct_info.constant_storage.data + it.offset_into_constant_storage;
-            return cast(*Storage_Kind) storage_kind_ptr;
-        }
-    }
+try_get_struct_info :: (info: *Type_Info) -> *Type_Info_Struct #must {
+    if info.type == {
+        case .STRUCT;
+            return cast(*Type_Info_Struct) info;
 
+        case .VARIANT;
+            variant_info := cast(*Type_Info_Variant) info;
+            if variant_info.variant_of.type == .STRUCT {
+                return cast(*Type_Info_Struct) variant_info.variant_of;
+            }
+    }
     return null;
 }

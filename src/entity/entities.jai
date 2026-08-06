@@ -21,9 +21,20 @@ init :: inline (entities: *Entities, allocator: Allocator = .{}) {
     entities.free_indices.allocator = entities.allocator;
 }
 
+deinit :: inline (using entities: *Entities) {
+    array_free(generations);
+    array_free(free_indices);
+}
+
 reset :: (using entities: *Entities) {
-    array_reset(*generations);
-    array_reset(*free_indices);
+    if generations.data && generations.allocated {
+        memset(generations.data, 0, generations.allocated * size_of(Entity.Generation));
+    }
+    if free_indices.data && free_indices.allocated {
+        memset(free_indices.data, 0, free_indices.allocated * size_of(Entity.Index));
+    }
+    array_reset_keeping_memory(*generations);
+    array_reset_keeping_memory(*free_indices);
     count = 0;
     next_index = 0;
     free_cursor = 0;

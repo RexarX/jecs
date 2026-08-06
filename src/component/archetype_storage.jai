@@ -12,20 +12,30 @@ Column :: struct {
     type:      *Type_Info;
     stride:    s64;
     bytes:     [..] u8;
+    on_remove: Component_Cleanup_Proc;
 
     allocator: Allocator;
 }
 
-init :: (column: *Column, type_info_ptr: *Type_Info, allocator: Allocator) {
+init :: (column: *Column, type_info_ptr: *Type_Info, allocator: Allocator,
+         on_remove: Component_Cleanup_Proc = null) {
     column.type = type_info_ptr;
     column.stride = type_info_ptr.runtime_size;
     if column.stride < 0 column.stride = 0;
+    column.on_remove = on_remove;
     column.allocator = allocator;
     column.bytes.allocator = allocator;
 }
 
+deinit :: inline (using column: *Column) {
+    array_free(bytes);
+}
+
 reset :: inline (using column: *Column) {
-    array_reset(*bytes);
+    if bytes.data && bytes.allocated {
+        memset(bytes.data, 0, bytes.allocated);
+    }
+    array_reset_keeping_memory(*bytes);
 }
 
 clear :: inline (using column: *Column) {
@@ -129,9 +139,19 @@ init :: (cache: *Archetype_Edge_Cache, allocator: Allocator) {
     cache.remove_edges.allocator = allocator;
 }
 
-deinit :: inline (cache: *Archetype_Edge_Cache) {
-    deinit(*cache.add_edges);
-    deinit(*cache.remove_edges);
+deinit :: inline (using cache: *Archetype_Edge_Cache) {
+    deinit(*add_edges);
+    deinit(*remove_edges);
+}
+
+reset :: inline (using cache: *Archetype_Edge_Cache) {
+    table_reset(*add_edges);
+    table_reset(*remove_edges);
+}
+
+clear :: inline (using cache: *Archetype_Edge_Cache) {
+    table_reset(*add_edges);
+    table_reset(*remove_edges);
 }
 
 Archetype_Storage :: struct {
@@ -141,6 +161,7 @@ Archetype_Storage :: struct {
     entity_archetype_map:  Entity_Index_Map;
     empty_archetype_index: Archetype_Index = INVALID_ARCHETYPE_INDEX;
     structural_version:    u64;
+    metadata:              *Table(*Type_Info, Component_Metadata);
 
     allocator:             Allocator;
 }
@@ -155,26 +176,44 @@ init :: (storage: *Archetype_Storage, allocator: Allocator = .{}) {
     init(*storage.entity_archetype_map, storage.allocator);
 }
 
-reset :: (using storage: *Archetype_Storage) {
+deinit :: (using storage: *Archetype_Storage) {
     for archetypes {
         deinit(it);
         free(it,, allocator);
     }
-    array_reset(*archetypes);
+    array_free(archetypes);
 
     for * edge_caches deinit(it);
-    array_reset(*edge_caches);
+    array_free(edge_caches);
 
     deinit(*archetype_map);
+    deinit(*entity_archetype_map);
+}
 
+reset :: (using storage: *Archetype_Storage) {
+    for archetypes {
+        for entity: it.entities {
+            clear_index(*entity_archetype_map, entity.index);
+        }
+        reset(it);
+    }
+    for * edge_caches reset(it);
+    table_reset(*archetype_map);
+    // Re-register surviving archetypes in the emptied map.
+    for arch, i: archetypes {
+        table_add(*archetype_map, arch.id.hash, cast(Archetype_Index) i);
+    }
     reset(*entity_archetype_map);
-    empty_archetype_index = INVALID_ARCHETYPE_INDEX;
     structural_version = 0;
 }
 
 clear :: (using storage: *Archetype_Storage) {
-    for archetypes clear(it);
-    clear(*entity_archetype_map);
+    for archetypes {
+        for entity: it.entities {
+            clear_index(*entity_archetype_map, entity.index);
+        }
+        clear(it);
+    }
     structural_version = 0;
 }
 
@@ -207,6 +246,7 @@ get_or_create_archetype :: (using storage: *Archetype_Storage,
 
     arch := New(Archetype,, allocator);
     init(arch, id, allocator);
+    apply_column_cleanup_procs(storage, arch);
     arch_index = cast(Archetype_Index) archetypes.count;
     array_add(*archetypes, arch);
 
@@ -264,6 +304,7 @@ assign_entity_archetype_index :: inline (using storage: *Archetype_Storage,
 }
 
 // src/dst columns follow sorted Archetype_Id.types — merge-walk instead of hash lookups.
+// Surviving columns are moved (no cleanup); src-only columns are discarded (cleanup fires).
 migrate_entity :: (using storage: *Archetype_Storage, entity: Entity,
                    src_index: Archetype_Index, dst_index: Archetype_Index) {
     if src_index == dst_index return;
@@ -290,19 +331,40 @@ migrate_entity :: (using storage: *Archetype_Storage, entity: Entity,
             src_i += 1;
             dst_i += 1;
         } else if src_type < dst_type {
+            cleanup_column_row(*src.columns[src_i], src_row);
             src_i += 1;
         } else {
             dst_i += 1;
         }
     }
 
-    swapped := remove_entity(src, entity);
+    while src_i < src.columns.count {
+        cleanup_column_row(*src.columns[src_i], src_row);
+        src_i += 1;
+    }
+
+    swapped := remove_entity_raw(src, entity);
     assign_entity_archetype_index(storage, entity.index, dst_index);
     if is_valid(swapped) {
         assign_entity_archetype_index(storage, swapped.index, src_index);
     }
 
     structural_version += 1;
+}
+
+lookup_on_remove :: inline (using storage: *Archetype_Storage,
+                            type_info_ptr: *Type_Info) -> Component_Cleanup_Proc #must {
+    if !metadata return null;
+    meta, found := table_find(metadata, type_info_ptr);
+    if !found return null;
+    return meta.on_remove;
+}
+
+apply_column_cleanup_procs :: (using storage: *Archetype_Storage,
+                               archetype: *Archetype) {
+    for * col: archetype.columns {
+        col.on_remove = lookup_on_remove(storage, col.type);
+    }
 }
 
 is_tracked_entity :: inline (using storage: *Archetype_Storage,

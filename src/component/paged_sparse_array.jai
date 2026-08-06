@@ -19,14 +19,14 @@ init :: inline (array: *Paged_Sparse_Array($page_bits),
     array.page_table.allocator = array.allocator;
 }
 
-reset :: (using array: *Paged_Sparse_Array($page_bits)) {
+deinit :: (using array: *Paged_Sparse_Array($page_bits)) {
     for page: page_table {
         if page free(page,, allocator);
     }
-    array_reset(*page_table);
+    array_free(page_table);
 }
 
-clear :: (using array: *Paged_Sparse_Array($page_bits)) {
+reset :: (using array: *Paged_Sparse_Array($page_bits)) {
     for page: page_table {
         if page {
             for * page.slots {
@@ -34,6 +34,10 @@ clear :: (using array: *Paged_Sparse_Array($page_bits)) {
             }
         }
     }
+}
+
+clear :: (using array: *Paged_Sparse_Array($page_bits)) {
+    // No full-page walk: callers invalidate only live indices via clear_index.
 }
 
 assign :: (using array: *Paged_Sparse_Array($page_bits),

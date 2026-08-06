@@ -17,18 +17,25 @@ init :: (components: *Components, allocator: Allocator = .{}) {
     components.metadata.allocator = components.allocator;
     init(*components.archetype_storage, components.allocator);
     init(*components.sparse_set_storage, components.allocator);
+    components.archetype_storage.metadata = *components.metadata;
+    components.sparse_set_storage.metadata = *components.metadata;
+}
+
+deinit :: (using components: *Components) {
+    deinit(*archetype_storage);
+    deinit(*sparse_set_storage);
+    deinit(*metadata);
 }
 
 reset :: inline (using components: *Components) {
     reset(*sparse_set_storage);
     reset(*archetype_storage);
-    deinit(*metadata);
+    table_reset(*metadata);
 }
 
 clear :: inline (using components: *Components) {
     clear(*sparse_set_storage);
     clear(*archetype_storage);
-    table_reset(*metadata);
 }
 
 register :: inline (components: *Components, $T: Type) {
@@ -43,9 +50,17 @@ register :: inline (components: *Components, info: *Type_Info) {
 
 register :: inline (components: *Components, info: *Type_Info,
                     meta: Component_Metadata) {
-    _, found := table_find(*components.metadata, info);
-    if found return;
+    existing := table_find_pointer(*components.metadata, info);
+    if existing {
+        // Typed registration can upgrade a prior dynamic (null on_remove) entry.
+        if meta.on_remove && existing.on_remove != meta.on_remove {
+            existing.on_remove = meta.on_remove;
+            apply_on_remove_to_live_storage(components, info, meta.on_remove);
+        }
+        return;
+    }
     table_add(*components.metadata, info, meta);
+    apply_on_remove_to_live_storage(components, info, meta.on_remove);
 }
 
 get_or_register_metadata :: (components: *Components,
@@ -73,9 +88,13 @@ add_component :: (using components: *Components, entity: Entity, value: $T) {
             dst_index := get_or_create_archetype_add_edge(
                 *archetype_storage, src_index, type_info(T));
             migrate_entity(*archetype_storage, entity, src_index, dst_index);
+            assign_component_bytes(get_entity_archetype(components, entity),
+                                   entity, type_info(T), xx *value,
+                                   cleanup_old = false);
+        } else {
+            assign_component(get_entity_archetype(components, entity),
+                             entity, value);
         }
-        assign_component(get_entity_archetype(components, entity),
-                         entity, value);
     }
 }
 
@@ -97,8 +116,9 @@ try_add_component :: (using components: *Components,
         dst_index := get_or_create_archetype_add_edge(
             *archetype_storage, src_index, type_info(T));
         migrate_entity(*archetype_storage, entity, src_index, dst_index);
-        assign_component(get_entity_archetype(components, entity),
-                         entity, value);
+        assign_component_bytes(get_entity_archetype(components, entity),
+                               entity, type_info(T), xx *value,
+                               cleanup_old = false);
         return true;
     }
 }
@@ -353,6 +373,19 @@ get_structural_version :: inline (using components: *Components) -> u64 #must {
 
 #scope_module;
 
+apply_on_remove_to_live_storage :: (components: *Components, info: *Type_Info,
+                                    on_remove: Component_Cleanup_Proc) {
+    if !on_remove return;
+
+    set := try_find_set(*components.sparse_set_storage, info);
+    if set set.on_remove = on_remove;
+
+    for arch: components.archetype_storage.archetypes {
+        col := try_get_column(arch, info);
+        if col col.on_remove = on_remove;
+    }
+}
+
 has_components_internal :: (using components: *Components,
                             entity: Entity, values: [] Any) -> bool #must {
     for value: values {
@@ -554,9 +587,17 @@ add_archetype_components :: (using components: *Components,
     src_index := get_archetype_index(components, entity);
     src := get_archetype(*archetype_storage, src_index);
 
-    needs_migrate := false;
+    // Record which values already exist so post-migrate assign can cleanup.
+    was_present: [..] bool;
+    was_present.allocator = temp;
+    array_reserve(*was_present, values.count);
     for value: values {
-        if !has_column(src, value.type) {
+        array_add(*was_present, has_column(src, value.type));
+    }
+
+    needs_migrate := false;
+    for present: was_present {
+        if !present {
             needs_migrate = true;
             break;
         }
@@ -579,8 +620,9 @@ add_archetype_components :: (using components: *Components,
     }
 
     dst := get_entity_archetype(components, entity);
-    for value: values {
-        assign_component_bytes(dst, entity, value.type, value.value_pointer);
+    for value, i: values {
+        assign_component_bytes(dst, entity, value.type, value.value_pointer,
+                               cleanup_old = was_present[i]);
     }
 }
 

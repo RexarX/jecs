@@ -3,6 +3,7 @@
 
 Sparse_Set_Storage :: struct {
     storages:  Table(*Type_Info, Sparse_Storage_Entry);
+    metadata:  *Table(*Type_Info, Component_Metadata);
     allocator: Allocator;
 }
 
@@ -13,12 +14,19 @@ init :: inline (storage: *Sparse_Set_Storage, allocator: Allocator = .{}) {
     storage.storages.allocator = storage.allocator;
 }
 
-reset :: (using storage: *Sparse_Set_Storage) {
+deinit :: (using storage: *Sparse_Set_Storage) {
     for entry, type_info_ptr: storages {
         entry_ptr := table_find_pointer(*storages, type_info_ptr);
         if entry_ptr free_entry(entry_ptr, allocator);
     }
     deinit(*storages);
+}
+
+reset :: (using storage: *Sparse_Set_Storage) {
+    for entry, type_info_ptr: storages {
+        entry_ptr := table_find_pointer(*storages, type_info_ptr);
+        if entry_ptr && entry_ptr.storage reset(entry_ptr.storage);
+    }
 }
 
 clear :: (using storage: *Sparse_Set_Storage) {
@@ -142,7 +150,7 @@ ensure_set :: (using storage: *Sparse_Set_Storage,
     entry := table_find_pointer(*storages, type_info_ptr);
     if entry return as_sparse_set(entry);
 
-    new_entry := make_sparse_storage_entry(type_info_ptr, allocator);
+    new_entry := make_sparse_storage_entry(storage, type_info_ptr, allocator);
     table_add(*storages, type_info_ptr, new_entry);
     entry_ptr := table_find_pointer(*storages, type_info_ptr);
     assert(entry_ptr != null, "Failed to create sparse storage for type %!",
@@ -154,16 +162,25 @@ Sparse_Storage_Entry :: struct {
     storage: *Sparse_Set;
 }
 
-make_sparse_storage_entry :: inline (type_info_ptr: *Type_Info,
+lookup_on_remove :: inline (using storage: *Sparse_Set_Storage,
+                            type_info_ptr: *Type_Info) -> Component_Cleanup_Proc #must {
+    if !metadata return null;
+    meta, found := table_find(metadata, type_info_ptr);
+    if !found return null;
+    return meta.on_remove;
+}
+
+make_sparse_storage_entry :: inline (storage: *Sparse_Set_Storage,
+                              type_info_ptr: *Type_Info,
                               allocator: Allocator) -> Sparse_Storage_Entry #must {
     set := New(Sparse_Set,, allocator);
-    init(set, type_info_ptr, allocator);
+    init(set, type_info_ptr, allocator, lookup_on_remove(storage, type_info_ptr));
     return .{storage = set};
 }
 
 free_entry :: (entry: *Sparse_Storage_Entry, allocator: Allocator) {
     if entry.storage {
-        reset(entry.storage);
+        deinit(entry.storage);
         free(entry.storage,, allocator);
         entry.* = .{};
     }

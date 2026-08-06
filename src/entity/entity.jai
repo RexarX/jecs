@@ -20,20 +20,14 @@ operator == :: inline (lhs: Entity, rhs: Entity) -> bool #must {
     return lhs.index == rhs.index && lhs.generation == rhs.generation;
 }
 
-is_valid :: inline (entity: Entity) -> bool #must {
-    return entity != INVALID_ENTITY;
-}
-
-get_hash :: inline (entity: Entity) -> u32 #must {
-    if !is_valid(entity) return 0;
-    return get_hash(entity.generation, get_hash(entity.index));
+is_valid :: inline (using entity: Entity) -> bool #must {
+    return entity.index != Entity.INVALID_INDEX
+           && entity.generation != Entity.INVALID_GENERATION;
 }
 
 // Generation encoding: top bit = alive, low 31 bits = monotonic counter.
 // Reserved handles carry the future alive generation; validate succeeds only once
 // the slot has been materialized (create_entity or flush_reserved_entities).
-
-
 
 is_alive_generation :: inline (generation: Entity.Generation) -> bool #must {
     return (generation & Entity.ALIVE_BIT) != 0
@@ -42,8 +36,20 @@ is_alive_generation :: inline (generation: Entity.Generation) -> bool #must {
 
 next_generation :: inline (generation: Entity.Generation,
                            alive := true) -> Entity.Generation #must {
-    counter := cast(u32) (generation & Entity.COUNTER_MASK);
-    counter = ifx counter == Entity.COUNTER_MASK then 0 else counter + 1;
-    result := counter | (ifx alive then Entity.ALIVE_BIT else 0);
-    return cast(Entity.Generation) result;
+    counter: Entity.Generation = generation & Entity.COUNTER_MASK;
+    if alive {
+        return counter | Entity.ALIVE_BIT;
+    }
+
+    if counter == Entity.COUNTER_MASK {
+        counter = 0;
+    } else {
+        counter = counter + 1;
+    }
+    return counter;
+}
+
+get_hash :: inline (using entity: Entity) -> u32 #must {
+    if !is_valid(entity) return 0;
+    return get_hash(generation, get_hash(index));
 }

@@ -25,8 +25,15 @@ init :: inline (id: *Archetype_Id, allocator: Allocator = .{}) {
     id.types.allocator = id.allocator;
 }
 
+deinit :: inline (using id: *Archetype_Id) {
+    array_free(types);
+}
+
 reset :: inline (using id: *Archetype_Id) {
-    array_reset(*types);
+    if types.data && types.allocated {
+        memset(types.data, 0, types.allocated * size_of(*Type_Info));
+    }
+    array_reset_keeping_memory(*types);
     hash = 0;
 }
 

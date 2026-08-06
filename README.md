@@ -7,7 +7,7 @@ Jai ECS library.
 Clone or submodule this repository into your project's `modules` folder:
 
 ```
-my_project/
+your_project/
   modules/
     jecs/          ← this repo
 ```
@@ -34,17 +34,3 @@ array_add(*import_path, tprint("%/modules", #filepath));
 array_add(*import_path, ..options.import_path);
 options.import_path = import_path;
 ```
-
-## Building the static library
-
-```bash
-jai build.jai
-```
-
-Build presets: `-debug` (default), `-relwithdebinfo`, `-release` (can be combined to build multiple presets in parallel).
-
-```bash
-jai build.jai - -release
-```
-
-Output goes to `bin/<platform>-<arch>-<preset>/`.

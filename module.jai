@@ -1,3 +1,5 @@
+#module_parameters(INDEX_TYPE: Type = u32, GENERATION_TYPE: Type = u32);
+
 #load "src/component/archetype.jai";
 #load "src/component/archetype_id.jai";
 #load "src/component/archetype_storage.jai";

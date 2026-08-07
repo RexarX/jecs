@@ -12,5 +12,11 @@
 #load "src/entity/entity.jai";
 #load "src/entity/entities.jai";
 
+#load "src/query/iterate.jai";
+#load "src/query/plan.jai";
+#load "src/query/query.jai";
+#load "src/query/row.jai";
+#load "src/query/terms.jai";
+
 #load "src/util.jai";
 #load "src/world.jai";

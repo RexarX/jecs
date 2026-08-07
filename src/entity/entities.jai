@@ -128,6 +128,14 @@ validate_entity :: (using entities: *Entities, entity: Entity) -> bool #must {
     return true;
 }
 
+try_get_entity :: (using entities: *Entities,
+                   index: Entity.Index) -> Entity, bool #must {
+    if index >= cast(Entity.Index) generations.count return .{}, false;
+    generation := generations[cast(s64) index];
+    if !is_alive_generation(generation) return .{}, false;
+    return .{index = index, generation = generation}, true;
+}
+
 // Not thread-safe w.r.t. reserve_entity — see reserve_entity contract.
 flush_reserved_entities :: (using entities: *Entities) {
     current_free_cursor := free_cursor;

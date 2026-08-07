@@ -154,13 +154,20 @@ clear :: inline (using cache: *Archetype_Edge_Cache) {
     table_reset(*remove_edges);
 }
 
+Component_Archetype_Index :: struct {
+    archetypes: [..] Archetype_Index;
+    allocator:  Allocator;
+}
+
 Archetype_Storage :: struct {
     archetypes:            [..] *Archetype;
     archetype_map:         Table(u64, Archetype_Index);
     edge_caches:           [..] Archetype_Edge_Cache;
     entity_archetype_map:  Entity_Index_Map;
+    component_archetypes:  Table(*Type_Info, Component_Archetype_Index);
     empty_archetype_index: Archetype_Index = INVALID_ARCHETYPE_INDEX;
-    structural_version:    u64;
+    // Bumps only when a new archetype is created (catalog growth).
+    catalog_version:       u64;
     metadata:              *Table(*Type_Info, Component_Metadata);
 
     allocator:             Allocator;
@@ -173,6 +180,8 @@ init :: (storage: *Archetype_Storage, allocator: Allocator = .{}) {
     init(*storage.archetype_map,, storage.allocator);
     storage.archetype_map.allocator = storage.allocator;
     storage.edge_caches.allocator = storage.allocator;
+    init(*storage.component_archetypes,, storage.allocator);
+    storage.component_archetypes.allocator = storage.allocator;
     init(*storage.entity_archetype_map, storage.allocator);
 }
 
@@ -186,6 +195,11 @@ deinit :: (using storage: *Archetype_Storage) {
     for * edge_caches deinit(it);
     array_free(edge_caches);
 
+    for index, type_info_ptr: component_archetypes {
+        index_ptr := table_find_pointer(*component_archetypes, type_info_ptr);
+        if index_ptr array_free(index_ptr.archetypes);
+    }
+    deinit(*component_archetypes);
     deinit(*archetype_map);
     deinit(*entity_archetype_map);
 }
@@ -200,11 +214,11 @@ reset :: (using storage: *Archetype_Storage) {
     for * edge_caches reset(it);
     table_reset(*archetype_map);
     // Re-register surviving archetypes in the emptied map.
+    // Catalog unchanged — component indexes and catalog_version stay valid.
     for arch, i: archetypes {
         table_add(*archetype_map, arch.id.hash, cast(Archetype_Index) i);
     }
     reset(*entity_archetype_map);
-    structural_version = 0;
 }
 
 clear :: (using storage: *Archetype_Storage) {
@@ -214,7 +228,6 @@ clear :: (using storage: *Archetype_Storage) {
         }
         clear(it);
     }
-    structural_version = 0;
 }
 
 ensure_empty_archetype :: (using storage: *Archetype_Storage) -> Archetype_Index {
@@ -255,7 +268,8 @@ get_or_create_archetype :: (using storage: *Archetype_Storage,
     array_add(*edge_caches, cache);
 
     table_add(*archetype_map, id.hash, arch_index);
-    structural_version += 1;
+    register_archetype_in_component_index(storage, arch, arch_index);
+    catalog_version += 1;
     return arch_index;
 }
 
@@ -348,8 +362,6 @@ migrate_entity :: (using storage: *Archetype_Storage, entity: Entity,
     if is_valid(swapped) {
         assign_entity_archetype_index(storage, swapped.index, src_index);
     }
-
-    structural_version += 1;
 }
 
 lookup_on_remove :: inline (using storage: *Archetype_Storage,
@@ -391,7 +403,35 @@ get_archetype_count :: inline (using storage: *Archetype_Storage) -> s64 #must {
     return archetypes.count;
 }
 
+get_catalog_version :: inline (using storage: *Archetype_Storage) -> u64 #must {
+    return catalog_version;
+}
+
+get_component_archetypes :: inline (using storage: *Archetype_Storage,
+                                    type_info_ptr: *Type_Info) -> [] Archetype_Index #must {
+    index := table_find_pointer(*component_archetypes, type_info_ptr);
+    if !index return .{};
+    return index.archetypes;
+}
+
 #scope_module;
+
+register_archetype_in_component_index :: (using storage: *Archetype_Storage,
+                                          arch: *Archetype,
+                                          arch_index: Archetype_Index) {
+    for type_info_ptr: arch.id.types {
+        index := table_find_pointer(*component_archetypes, type_info_ptr);
+        if !index {
+            created: Component_Archetype_Index;
+            created.allocator = allocator;
+            created.archetypes.allocator = allocator;
+            table_add(*component_archetypes, type_info_ptr, created);
+            index = table_find_pointer(*component_archetypes, type_info_ptr);
+            assert(index != null);
+        }
+        array_add(*index.archetypes, arch_index);
+    }
+}
 
 archetype_ids_equal :: (a: Archetype_Id, b: Archetype_Id) -> bool #must {
     if a.types.count != b.types.count return false;

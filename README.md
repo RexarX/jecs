@@ -143,3 +143,64 @@ Jecs.flush_reserved_entities(*world);
 assert(Jecs.validate_entity(*world, reserved));
 Jecs.add_component(*world, reserved, Position.{});
 ```
+
+### Queries
+
+Queries are lightweight handles: `*Entities`, `*Components`, and an embedded `Query_Plan`.
+Each `query()` / `query_entities()` builds a fresh plan into the handle.
+
+Default allocator is `temp` — use it for queries that don't outlive `reset_temporary_storage` call.
+If query need to be valid for a long time use a persistent allocator and `deinit`:
+
+```jai
+movement := Jecs.query(*world, Position, Velocity, allocator = world.allocator);
+defer Jecs.deinit(*movement);
+
+for row, entity: movement { /* ... */ }
+
+// One-shot (default temp):
+for row, entity: Jecs.query(*world, Position) { /* ... */ }
+```
+
+Terms:
+
+- Bare non-tag type — required fetch
+- Bare tag — required presence filter
+- `Optional(T)` — nullable fetch (value components only)
+- `With(T)` / `Without(T)` — presence filters without fetching
+
+```jai
+Dead     :: struct {}
+Selected :: struct {}
+Health   :: struct { value: float; }
+
+// Optional: fetch when present; Without
+// Without: exclude entities with Dead component
+for row, entity: Jecs.query(*world, Position, Jecs.Optional(Health), Jecs.Without(Dead)) {
+    pos := Jecs.get(row, Position);      // always non-null
+    hp  := Jecs.try_get(row, Health);    // *Health or null
+    pos.x += ifx hp then hp.value else 0;
+}
+
+// With: require Selected without fetching it (useful for tags)
+for row, entity: Jecs.query(*world, Position, Jecs.With(Selected)) {
+    _ = Jecs.get(row, Position);
+}
+
+// Entity-only query that gets dead entities (no component fetch)
+for entity: Jecs.query_entities(*world, Position, Jecs.With(Dead)) {
+    // ...
+}
+
+```
+
+**Reuse:** pass a persistent `allocator` and call `deinit` when done.
+Default `temp` is for one-shot iteration in the same scope. Structural mutation concurrent with iteration is not safe.
+
+**Invalidation:** archetype-catalog growth (new archetype) refreshes matched archetype lists; entity migration among existing archetypes does not.
+Sparse bindings refresh when that component's sparse storage is first created.
+
+**Invalidates the handle:** `deinit(*query)`, world going out of scope while the query still holds pointers into a world-owned allocator, or `deinit(*world)` while plan memory used that allocator.
+
+**Invalidates an in-progress iteration:** create/destroy entities, `clear`/`reset`, add/remove components.
+Value mutation through `get`/`try_get` pointers is allowed. Result order is unspecified.

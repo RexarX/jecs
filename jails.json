@@ -1,6 +1,0 @@
-{
-  "roots": ["build.jai"],
-  "build_root": "build.jai",
-  "intermediate_path": ".build",
-  "auto_insert_parentheses": true
-}

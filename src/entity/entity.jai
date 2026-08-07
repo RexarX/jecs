@@ -5,17 +5,6 @@
     entity_validate_id_type(GENERATION_TYPE);
 }
 
-entity_validate_id_type :: ($T: Type) #compile_time {
-    info :: type_info(T);
-    #assert info.type == .INTEGER
-        "Entity index/generation types must be unsigned integers (u16, u32, or u64)!";
-    integer_info :: cast(*Type_Info_Integer) info;
-    #assert !integer_info.signed
-        "Entity index/generation types must be unsigned integers (u16, u32, or u64)!";
-    #assert size_of(T) == 2 || size_of(T) == 4 || size_of(T) == 8
-        "Entity index/generation types must be u16, u32, or u64!";
-}
-
 #if size_of(INDEX_TYPE) == 2 {
     ENTITY_INVALID_INDEX :: cast(INDEX_TYPE) 0xFFFF;
 } else #if size_of(INDEX_TYPE) == 4 {
@@ -93,4 +82,17 @@ next_generation :: (generation: Entity.Generation,
 get_hash :: inline (using entity: Entity) -> u32 #must {
     if !is_valid(entity) return 0;
     return get_hash(cast(u32) generation, get_hash(cast(u32) index));
+}
+
+#scope_file;
+
+entity_validate_id_type :: ($T: Type) #compile_time {
+    info :: type_info(T);
+    #assert info.type == .INTEGER
+        "Entity index/generation types must be unsigned integers (u16, u32, or u64)!";
+    integer_info :: cast(*Type_Info_Integer) info;
+    #assert !integer_info.signed
+        "Entity index/generation types must be unsigned integers (u16, u32, or u64)!";
+    #assert size_of(T) == 2 || size_of(T) == 4 || size_of(T) == 8
+        "Entity index/generation types must be u16, u32, or u64!";
 }

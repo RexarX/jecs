@@ -91,6 +91,21 @@ contains_component :: (using id: *Archetype_Id,
     return false;
 }
 
+contains_all :: (using id: *Archetype_Id, wanted: [] *Type_Info) -> bool #must {
+    for info: wanted {
+        if !contains_component(id, info) return false;
+    }
+    return true;
+}
+
+contains_none :: (using id: *Archetype_Id,
+                  excluded: [] *Type_Info) -> bool #must {
+    for info: excluded {
+        if contains_component(id, info) return false;
+    }
+    return true;
+}
+
 is_empty :: inline (using id: *Archetype_Id) -> bool #must {
     return types.count == 0;
 }

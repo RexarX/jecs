@@ -84,11 +84,10 @@ needs_flush :: inline (using world: *World) -> bool #must {
     return needs_flush(*entities);
 }
 
-assert_entity_in_world :: inline (using world: *World, entity: Entity,
-                                  loc := #caller_location) {
-    assert(is_valid(entity), "Entity % must be valid!", entity, loc = loc);
+assert_entity_in_world :: (using world: *World, entity: Entity) #expand {
+    assert(is_valid(entity), "Entity % must be valid!", entity);
     assert(validate_entity(*entities, entity), "Entity % must exist in the world!",
-           entity, loc = loc);
+           entity);
 }
 
 // Components API passthrough.
@@ -166,4 +165,38 @@ is_tracked_entity :: inline (using world: *World,
                              entity: Entity) -> bool #must {
     assert(is_valid(entity), "Entity % must be valid!", entity);
     return is_tracked_entity(*components, entity);
+}
+
+// Query API passthrough.
+
+query :: inline (using world: *World,
+                 allocator: Allocator = .{}) -> Query #must {
+    return query(*entities, *components, allocator = allocator);
+}
+
+query :: inline (using world: *World, terms: .. Type,
+                 allocator: Allocator = .{}) -> Query #must {
+    return query(*entities, *components, ..terms, allocator = allocator);
+}
+
+query :: inline (using world: *World, values: .. Any,
+                 allocator: Allocator = .{}) -> Query #must {
+    return query(*entities, *components, ..values, allocator = allocator);
+}
+
+query_entities :: inline (using world: *World,
+                          allocator: Allocator = .{}) -> Query_Entities #must {
+    return query_entities(*entities, *components, allocator = allocator);
+}
+
+query_entities :: inline (using world: *World, terms: .. Type,
+                          allocator: Allocator = .{}) -> Query_Entities #must {
+    return query_entities(*entities, *components, ..terms,
+                          allocator = allocator);
+}
+
+query_entities :: inline (using world: *World, values: .. Any,
+                          allocator: Allocator = .{}) -> Query_Entities #must {
+    return query_entities(*entities, *components, ..values,
+                          allocator = allocator);
 }

@@ -256,8 +256,8 @@ has_component :: (using components: *Components,
     } else {
         if !is_tracked_entity(components, entity) return false;
         arch := get_entity_archetype(components, entity);
-        if !has_column(arch, T) return false;
-        return try_get_component(arch, entity, T) != null;
+        // Zero-sized @archetype tags have a column but no data pointer.
+        return has_column(arch, T);
     }
 }
 
@@ -323,7 +323,6 @@ clear_entity :: (using components: *Components, entity: Entity) {
         allocate_row(empty, entity);
         assign_entity_archetype_index(*archetype_storage, entity.index,
                                       empty_index);
-        archetype_storage.structural_version += 1;
     }
 
     try_remove_entity(*sparse_set_storage, entity);
@@ -367,8 +366,18 @@ get_archetype_count :: inline (using components: *Components) -> s64 #must {
     return get_archetype_count(*archetype_storage);
 }
 
-get_structural_version :: inline (using components: *Components) -> u64 #must {
-    return archetype_storage.structural_version;
+get_catalog_version :: inline (using components: *Components) -> u64 #must {
+    return get_catalog_version(*archetype_storage);
+}
+
+get_component_archetypes :: inline (using components: *Components,
+                                    type_info_ptr: *Type_Info) -> [] Archetype_Index #must {
+    return get_component_archetypes(*archetype_storage, type_info_ptr);
+}
+
+get_sparse_generation :: inline (using components: *Components,
+                                 type_info_ptr: *Type_Info) -> u64 #must {
+    return get_sparse_generation(*sparse_set_storage, type_info_ptr);
 }
 
 #scope_module;

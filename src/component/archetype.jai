@@ -1,9 +1,10 @@
 #import "Basic";
 #import "Hash_Table";
 
-Row_Index    :: #type,isa Entity.Index;
-Column_Index :: #type,isa Entity.Index;
-INVALID_ROW  :: cast(Row_Index) Entity.INVALID_INDEX;
+Row_Index            :: #type,isa Entity.Index;
+Column_Index         :: #type,isa Entity.Index;
+INVALID_ROW          :: cast(Row_Index) Entity.INVALID_INDEX;
+INVALID_COLUMN_INDEX :: cast(Column_Index) Entity.INVALID_INDEX;
 
 Archetype :: struct {
     id:            Archetype_Id;

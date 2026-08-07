@@ -36,7 +36,7 @@ reset :: (using array: *Paged_Sparse_Array($page_bits)) {
     }
 }
 
-clear :: (using array: *Paged_Sparse_Array($page_bits)) {
+clear :: inline (using array: *Paged_Sparse_Array($page_bits)) {
     // No full-page walk: callers invalidate only live indices via clear_index.
 }
 

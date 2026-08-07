@@ -4,6 +4,7 @@
 Sparse_Set_Storage :: struct {
     storages:  Table(*Type_Info, Sparse_Storage_Entry);
     metadata:  *Table(*Type_Info, Component_Metadata);
+
     allocator: Allocator;
 }
 
@@ -159,7 +160,15 @@ ensure_set :: (using storage: *Sparse_Set_Storage,
 }
 
 Sparse_Storage_Entry :: struct {
-    storage: *Sparse_Set;
+    storage:    *Sparse_Set;
+    generation: u64; // bumps when storage pointer created/replaced or reset/clear
+}
+
+get_sparse_generation :: (using storage: *Sparse_Set_Storage,
+                          type_info_ptr: *Type_Info) -> u64 #must {
+    entry := table_find_pointer(*storages, type_info_ptr);
+    if !entry return 0;
+    return entry.generation;
 }
 
 lookup_on_remove :: inline (using storage: *Sparse_Set_Storage,
@@ -175,7 +184,7 @@ make_sparse_storage_entry :: inline (storage: *Sparse_Set_Storage,
                               allocator: Allocator) -> Sparse_Storage_Entry #must {
     set := New(Sparse_Set,, allocator);
     init(set, type_info_ptr, allocator, lookup_on_remove(storage, type_info_ptr));
-    return .{storage = set};
+    return .{storage = set, generation = 1};
 }
 
 free_entry :: (entry: *Sparse_Storage_Entry, allocator: Allocator) {
